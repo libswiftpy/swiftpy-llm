@@ -44,11 +44,7 @@ public class LanguageModelSession {
     }
 
     /// Produces a response to a prompt.
-    public func respond(_ prompt: String? = nil) async throws -> String {
-        guard let prompt else {
-            throw PythonError.AssertionError("Prompt is required")
-        }
-
+    public func respond(_ prompt: String) async throws -> String {
         let response = Response()
         Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
 
@@ -58,21 +54,46 @@ public class LanguageModelSession {
 
         return response.content
     }
+
+    /// Produces a structured response to a prompt conforming to the given schema.
+    public func respond(_ prompt: String, schema: PyObject) async throws -> PyObject {
+        guard let json: [String: Any] = schema._schema,
+              let makeModel = schema._from_json else {
+            throw PythonError.ValueError("Invalid schema. Use models.model decorator on a class to create a schema.")
+        }
+
+        let response = Response()
+        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
+
+        let generationSchema = try GenerationSchema(pythonModelSchema: json)
+
+        for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
+            response.content = snapshot.content.jsonString
+            let model: PyObject = try makeModel(response.content)
+            response.model = try py.repr(model.reference)
+        }
+
+        return try makeModel(response.content)
+    }
 }
 
 @Observable
 private class Response {
     var content: String = ""
+    var model: String?
 }
 
 private struct ResponseContent: View {
     @State var response: Response
 
     var body: some View {
-        LogContainerView(tint: .indigo) {
-            Text(response.content)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if !response.content.isEmpty {
+            LogContainerView(tint: .yellow) {
+                Text(response.model ?? response.content)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.default, value: response.content)
+            }
         }
     }
 }

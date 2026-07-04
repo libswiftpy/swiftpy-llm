@@ -7,6 +7,8 @@ public enum LLM {
             module.classes(
                 LanguageModelSession.self,
             )
+            
+            module.Agent = LanguageModelSession.pyTypeObject
 
             if #available(anyAppleOS 27, *) {
                 module.classes(
