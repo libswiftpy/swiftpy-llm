@@ -27,8 +27,11 @@ public class LanguageModelSession {
     internal let session: FoundationModels.LanguageModelSession
 
     /// Start a new session with instructions.
-    public init(instructions: String? = nil) {
-        self.session = FoundationModels.LanguageModelSession(instructions: instructions)
+    public init(tools: [Tool]? = nil, instructions: String? = nil) {
+        self.session = FoundationModels.LanguageModelSession(
+            tools: tools ?? [],
+            instructions: instructions
+        )
     }
 
     public init(model: PyObject, instructions: String? = nil) throws(PythonError) {

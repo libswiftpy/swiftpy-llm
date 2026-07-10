@@ -11,7 +11,7 @@ import SwiftPy
 
 public struct PythonModelSchemaConverter {
     public init() {}
-
+    
     public func generationSchema(from schema: [String: Any]) throws(PythonError) -> GenerationSchema {
         let root = try dynamicGenerationSchema(from: schema)
         do {

@@ -20,6 +20,9 @@ let package = Package(
             dependencies: [
                 "SwiftPy",
             ],
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )
