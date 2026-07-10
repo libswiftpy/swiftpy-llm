@@ -55,4 +55,4 @@ def tool(fn):
     def wrapped(args):
         return fn(*[args._fields[f] for f in field_names])
 
-    return Tool(Args, wrapped)
+    return Tool(Args, wrapped, fn)

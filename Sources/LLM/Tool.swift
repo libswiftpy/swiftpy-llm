@@ -7,7 +7,9 @@
 
 import SwiftPy
 import FoundationModels
+import SwiftUI
 
+/// A tool what can be called by an llm.Agent.
 @Scriptable
 @MainActor
 public final class Tool: FoundationModels.Tool, Sendable {
@@ -16,8 +18,9 @@ public final class Tool: FoundationModels.Tool, Sendable {
     public let parameters: GenerationSchema
     let makeParams: PyObject
     let function: PyObject
+    let base: PyObject
     
-    init(argsType: PyObject, function: PyObject) throws {
+    init(argsType: PyObject, function: PyObject, base: PyObject) throws {
         guard let schema: [String: Any] = argsType._schema,
               let makeParams = argsType._from_json else {
             throw PythonError.ValueError("Failed to get tool parameters")
@@ -31,17 +34,48 @@ public final class Tool: FoundationModels.Tool, Sendable {
         self.parameters = try GenerationSchema(pythonModelSchema: schema)
         self.makeParams = makeParams
         self.function = function
+        self.base = base
+    }
+
+    func __call__(params: Unpack) async throws -> PyObject {
+        try py.retain(py.call(base.reference, unpacking: params.values))
     }
 }
 
 extension Tool {
     public func call(arguments: GeneratedContent) async throws -> String {
         let params: PyObject = try makeParams(arguments.jsonString)
+       
         let result: PyObject = try function(params)
         if let task = AsyncTask(result) {
             await task.untilCompletes()
-            return try String.cast(task.result?.reference)
+            let result = try String.cast(task.result?.reference)
+            log(arguments: arguments, result: result)
+            return result
         }
-        return try String.cast(result.reference)
+        
+        let resultString = try String.cast(result.reference)
+        log(arguments: arguments, result: resultString)
+        return resultString
+    }
+
+    private func log(arguments: GeneratedContent, result: String?) {
+        let paramStr: String = {
+            guard let data = arguments.jsonString.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return arguments.jsonString
+            }
+            return dict.map { key, value in
+                let valueStr = value is String ? "\"\(value)\"" : "\(value)"
+                return "\(key)=\(valueStr)"
+            }.joined(separator: ", ")
+        }()
+        let view = LogContainerView(tint: .orange, title: "\(self.name)(\(paramStr))", icon: "wrench.and.screwdriver") {
+            if let result {
+                Text(result)
+                    .font(.caption.monospaced())
+            }
+        }
+        Interpreter.onDisplay(AnyView(view))
     }
 }

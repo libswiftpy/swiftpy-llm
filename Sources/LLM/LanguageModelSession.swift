@@ -49,11 +49,12 @@ public class LanguageModelSession {
     /// Produces a response to a prompt.
     public func respond(_ prompt: String) async throws -> String {
         let response = Response()
-        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
 
         for try await snapshot in session.streamResponse(to: prompt) {
             response.content = snapshot.content
         }
+        
+        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
 
         return response.content
     }
