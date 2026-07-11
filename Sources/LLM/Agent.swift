@@ -23,7 +23,7 @@ extension LanguageModel {
 /// An object that represents a session that interacts with a language model.
 @Scriptable
 @MainActor
-public class LanguageModelSession {
+public class Agent {
     internal let session: FoundationModels.LanguageModelSession
 
     /// Start a new session with instructions.

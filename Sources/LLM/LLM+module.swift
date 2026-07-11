@@ -6,10 +6,8 @@ public enum LLM {
         PyBind.module("llm.native") { module in
             module.classes(
                 Tool.self,
-                LanguageModelSession.self,
+                Agent.self,
             )
-
-            module.Agent = LanguageModelSession.pyTypeObject
 
             if #available(anyAppleOS 27, *) {
                 module.classes(
