@@ -27,14 +27,14 @@ public class Agent {
     internal let session: FoundationModels.LanguageModelSession
 
     /// Start a new session with instructions.
-    public init(tools: [Tool]? = nil, instructions: String? = nil) {
+    public init(instructions: String? = nil, tools: [Tool]? = nil) {
         self.session = FoundationModels.LanguageModelSession(
             tools: tools ?? [],
             instructions: instructions
         )
     }
 
-    public init(model: PyObject, instructions: String? = nil) throws(PythonError) {
+    public init(model: PyObject, instructions: String? = nil, tools: [Tool]? = nil) throws(PythonError) {
         guard #available(anyAppleOS 27, *) else {
             throw .AssertionError("This feature is only supported on iOS 27 and above")
         }
@@ -43,17 +43,23 @@ public class Agent {
             throw .TypeError("Invalid model type")
         }
 
-        session = FoundationModels.LanguageModelSession(model: container.model, instructions: instructions)
+        session = FoundationModels.LanguageModelSession(
+            model: container.model,
+            tools: tools ?? [],
+            instructions: instructions
+        )
     }
 
     /// Produces a response to a prompt.
     public func respond(_ prompt: String) async throws -> String {
         let response = Response()
+        Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
 
         for try await snapshot in session.streamResponse(to: prompt) {
             response.content = snapshot.content
         }
-        
+
+        response.isComplete = true
         Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
 
         return response.content
@@ -67,7 +73,7 @@ public class Agent {
         }
 
         let response = Response()
-        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
+        Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
 
         let generationSchema = try GenerationSchema(pythonModelSchema: json)
 
@@ -77,6 +83,9 @@ public class Agent {
             response.model = try py.repr(model.reference)
         }
 
+        response.isComplete = true
+        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
+
         return try makeModel(response.content)
     }
 }
@@ -85,6 +94,25 @@ public class Agent {
 private class Response {
     var content: String = ""
     var model: String?
+    var isComplete = false
+}
+
+private struct PartialResponseContent: View {
+    @State var response: Response
+
+    var body: some View {
+        if !response.isComplete {
+            LogContainerView(tint: .yellow, title: "Generating response", icon: "sparkles") {
+                if response.content.isEmpty {
+                    LoadingResponseView()
+                } else {
+                    ResponseText(response: response)
+                }
+            }
+        } else {
+            EmptyView()
+        }
+    }
 }
 
 private struct ResponseContent: View {
@@ -92,12 +120,29 @@ private struct ResponseContent: View {
 
     var body: some View {
         if !response.content.isEmpty {
-            LogContainerView(tint: .yellow) {
-                Text(response.model ?? response.content)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .animation(.default, value: response.content)
+            LogContainerView(tint: .green, title: "Response", icon: "checkmark.circle") {
+                ResponseText(response: response)
             }
         }
+    }
+}
+
+private struct LoadingResponseView: View {
+    var body: some View {
+        Label("Loading model...", systemImage: "hourglass")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .symbolRenderingMode(.hierarchical)
+    }
+}
+
+private struct ResponseText: View {
+    @State var response: Response
+
+    var body: some View {
+        Text(response.model ?? response.content)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.default, value: response.content)
     }
 }
