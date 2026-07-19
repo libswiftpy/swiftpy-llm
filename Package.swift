@@ -7,8 +7,8 @@ let package = Package(
     platforms: [.macOS(.v26), .iOS(.v26), .visionOS(.v26)],
     products: [
         .library(
-            name: "LLM",
-            targets: ["LLM"],
+            name: "Agents",
+            targets: ["Agents"],
         ),
     ],
     dependencies: [
@@ -16,7 +16,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "LLM",
+            name: "Agents",
             dependencies: [
                 "SwiftPy",
             ],

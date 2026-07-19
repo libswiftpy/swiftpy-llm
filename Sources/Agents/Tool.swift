@@ -16,11 +16,11 @@ public final class Tool: FoundationModels.Tool, Sendable {
     public let name: String
     public let description: String
     public let parameters: GenerationSchema
-    let makeParams: PyObject
-    let function: PyObject
-    let base: PyObject
+    internal let makeParams: PyObject
+    internal let function: PyObject
+    internal let base: PyObject
     
-    init(argsType: PyObject, function: PyObject, base: PyObject) throws {
+    public init(argsType: PyObject, function: PyObject, base: PyObject) throws {
         guard let schema: [String: Any] = argsType._schema,
               let makeParams = argsType._from_json else {
             throw PythonError.ValueError("Failed to get tool parameters")

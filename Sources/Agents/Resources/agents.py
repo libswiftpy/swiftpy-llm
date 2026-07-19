@@ -1,5 +1,5 @@
 import inspect
-from llm.native import *
+from agents.native import Agent, Tool
 
 @classmethod
 def _args_from_json(cls, json_str):
@@ -28,7 +28,9 @@ def _resolve(ann):
 def _type_name(ann):
     return ann.__name__ if hasattr(ann, '__name__') else str(ann)
 
-def tool(fn):
+def tool(fn) -> Tool:
+    """Create a Tool from a callable.
+    """
     sig = inspect.signature(fn)
     params = list(sig.parameters.items())
 
@@ -36,7 +38,7 @@ def tool(fn):
     if len(params) == 1:
         ann = _resolve(params[0][1].annotation)
         if hasattr(ann, '_schema'):
-            return Tool(ann, fn)
+            return Tool(ann, fn, fn)
 
     # Multi-param pattern: synthesize args class
     field_names = [name for name, _ in params]
