@@ -67,6 +67,13 @@ public struct PythonModelSchemaConverter {
             throw .ValueError("Unsupported schema type: \(type)")
         }
 
+        // Parametrized list, e.g. "list[str]" -> array of the element schema.
+        if baseType.hasPrefix("list["), baseType.hasSuffix("]") {
+            let element = String(baseType.dropFirst("list[".count).dropLast())
+            let elementSchema = try dynamicGenerationSchema(forPythonType: element)
+            return DynamicGenerationSchema(arrayOf: elementSchema)
+        }
+
         switch baseType {
         case "str", "String":
             return DynamicGenerationSchema(type: String.self)
