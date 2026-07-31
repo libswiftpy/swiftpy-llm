@@ -8,12 +8,14 @@ public func initialize() {
             Agent.self,
         )
         
+#if swift(>=6.4)
         if #available(anyAppleOS 27, *) {
             module.classes(
                 LanguageModel.self
             )
         }
+#endif
     }
     
-    PyBind.module("agents", in: .module)
+    PyBind.module("agents") { _ in }
 }

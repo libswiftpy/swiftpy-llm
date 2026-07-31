@@ -2,6 +2,7 @@ import SwiftPy
 import SwiftUI
 import FoundationModels
 
+#if swift(>=6.4)
 @Scriptable
 @MainActor
 @available(anyAppleOS 27.0, *)
@@ -19,6 +20,7 @@ extension LanguageModel {
         self.init(model: model)
     }
 }
+#endif
 
 /// An object that represents a session that interacts with a language model.
 @Scriptable
@@ -34,6 +36,7 @@ public class Agent {
         )
     }
 
+#if swift(>=6.4)
     public init(model: PyObject, instructions: String? = nil, tools: [Tool]? = nil) throws(PythonError) {
         guard #available(anyAppleOS 27, *) else {
             throw .AssertionError("This feature is only supported on iOS 27 and above")
@@ -49,6 +52,7 @@ public class Agent {
             instructions: instructions
         )
     }
+#endif
 
     /// Produces a response to a prompt.
     public func respond(_ prompt: String) async throws -> String {
@@ -102,7 +106,9 @@ private struct PartialResponseContent: View {
 
     var body: some View {
         if !response.isComplete {
-            LogContainerView(tint: .yellow, title: "Generating response", icon: "sparkles") {
+            LogContainerView(tint: .yellow) {
+                Label("Generating response", systemImage: "sparkles")
+                    .font(.caption.bold())
                 if response.content.isEmpty {
                     LoadingResponseView()
                 } else {
@@ -120,7 +126,9 @@ private struct ResponseContent: View {
 
     var body: some View {
         if !response.content.isEmpty {
-            LogContainerView(tint: .green, title: "Response", icon: "checkmark.circle") {
+            LogContainerView(tint: .green) {
+                Label("Response", systemImage: "checkmark.circle")
+                    .font(.caption.bold())
                 ResponseText(response: response)
             }
         }

@@ -12,7 +12,7 @@ import SwiftUI
 /// A tool what can be called by an llm.Agent.
 @Scriptable
 @MainActor
-public final class Tool: FoundationModels.Tool, Sendable {
+public final class Tool: @preconcurrency FoundationModels.Tool, Sendable {
     public let name: String
     public let description: String
     public let parameters: GenerationSchema
@@ -25,7 +25,7 @@ public final class Tool: FoundationModels.Tool, Sendable {
               let makeParams = argsType._from_json else {
             throw PythonError.ValueError("Failed to get tool parameters")
         }
-        
+
         let name: String = argsType._tool_name ?? function.__name__ ?? "tool"
         let description: String = argsType._tool_description ?? function.__doc__ ?? ""
 
@@ -45,7 +45,7 @@ public final class Tool: FoundationModels.Tool, Sendable {
 extension Tool {
     public func call(arguments: GeneratedContent) async throws -> String {
         let params: PyObject = try makeParams(arguments.jsonString)
-       
+
         let result: PyObject = try function(params)
         if let task = AsyncTask(result) {
             await task.untilCompletes()
@@ -53,7 +53,7 @@ extension Tool {
             log(arguments: arguments, result: result)
             return result
         }
-        
+
         let resultString = try String.cast(result.reference)
         log(arguments: arguments, result: resultString)
         return resultString
@@ -70,10 +70,14 @@ extension Tool {
                 return "\(key)=\(valueStr)"
             }.joined(separator: ", ")
         }()
-        let view = LogContainerView(tint: .orange, title: "\(self.name)(\(paramStr))", icon: "wrench.and.screwdriver") {
-            if let result {
-                Text(result)
-                    .font(.caption.monospaced())
+        let view = LogContainerView(tint: .orange) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("\(self.name)(\(paramStr))", systemImage: "wrench.and.screwdriver")
+                    .font(.caption.bold())
+                if let result {
+                    Text(result)
+                        .font(.caption.monospaced())
+                }
             }
         }
         Interpreter.onDisplay(AnyView(view))
