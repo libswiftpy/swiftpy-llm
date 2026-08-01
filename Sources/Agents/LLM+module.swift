@@ -17,5 +17,5 @@ public func initialize() {
 #endif
     }
     
-    PyBind.module("agents") { _ in }
+    PyBind.module("agents", in: .module)
 }
