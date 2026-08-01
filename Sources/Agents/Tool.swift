@@ -48,7 +48,7 @@ extension Tool {
 
         let result: PyObject = try function(params)
         if let task = AsyncTask(result) {
-            await task.untilCompletes()
+            try await task.untilCompletes()
             let result = try String.cast(task.result?.reference)
             log(arguments: arguments, result: result)
             return result
