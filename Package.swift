@@ -12,7 +12,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.26.0"),
+        .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.27.0"),
     ],
     targets: [
         .target(
