@@ -1,3 +1,5 @@
+__doc__ = "Language model sessions and the tools they can call."
+
 import inspect
 from agents.native import Agent, Tool
 
