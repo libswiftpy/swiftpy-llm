@@ -13,12 +13,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.27.0"),
+        .package(url: "https://github.com/felfoldy/swiftpy-views", branch: "main"),
     ],
     targets: [
         .target(
             name: "Agents",
             dependencies: [
                 "SwiftPy",
+                .product(name: "SwiftPyViews", package: "swiftpy-views"),
             ],
             resources: [
                 .process("Resources")

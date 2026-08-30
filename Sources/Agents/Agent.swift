@@ -1,8 +1,10 @@
 import SwiftPy
+import SwiftPyViews
 import SwiftUI
 import FoundationModels
 
 #if swift(>=6.4)
+/// A language model an ``agents.Agent`` runs on, in place of the system default.
 @Scriptable
 @MainActor
 @available(anyAppleOS 27.0, *)
@@ -22,13 +24,16 @@ extension LanguageModel {
 }
 #endif
 
-/// An object that represents a session that interacts with a language model.
+/// A session that holds a conversation with a language model.
 @Scriptable
 @MainActor
 public class Agent {
     internal let session: FoundationModels.LanguageModelSession
 
-    /// Start a new session with instructions.
+    /// Starts a session with the on-device system model.
+    ///
+    /// instructions: Standing guidance the model follows for every prompt in the session, such as its role and the style to answer in. Defaults to None.
+    /// tools: Functions the model may call, each one built by the ``agents.tool`` decorator. Defaults to None.
     public init(instructions: String? = nil, tools: [Tool]? = nil) {
         self.session = FoundationModels.LanguageModelSession(
             tools: tools ?? [],
@@ -55,42 +60,71 @@ public class Agent {
 #endif
 
     /// Produces a response to a prompt.
-    public func respond(_ prompt: String) async throws -> String {
-        let response = Response()
-        Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
+    ///
+    /// prompt: What to ask the model.
+    /// schema: A class decorated with ``modeling.model``, to answer with an instance of it instead of text. Its annotated fields are the structure the model fills in, and defaults on them are offered to the model as defaults. Defaults to None.
+    ///
+    /// Returns a str, or an instance of `schema` where one is given, whose
+    /// fields are then read as ordinary attributes. The response streams into
+    /// the console as it arrives, and the session keeps every prompt and
+    /// response, so a later turn can refer back to an earlier one. Await the
+    /// result.
+    ///
+    /// ```python
+    /// from agents import Agent
+    /// from modeling import model
+    ///
+    /// @model
+    /// class Recipe:
+    ///     title: str
+    ///     minutes: int
+    ///
+    /// agent = Agent()
+    ///
+    /// text = await agent.respond("Name a pasta dish")
+    ///
+    /// recipe = await agent.respond("A quick pasta dish", schema=Recipe)
+    /// print(recipe.title)
+    /// ```
+    public func respond(_ prompt: String, schema: PyObject? = nil) async throws -> PyObject {
+        // Validated before anything is displayed, so a bad schema leaves no
+        // "generating" card behind.
+        var generationSchema: GenerationSchema?
+        var makeModel: PyObject?
 
-        for try await snapshot in session.streamResponse(to: prompt) {
-            response.content = snapshot.content
+        if let schema {
+            guard let json: [String: Any] = schema._schema,
+                  let factory = schema._from_json else {
+                throw PythonError.ValueError("Invalid schema. Use the modeling.model decorator on a class to create one.")
+            }
+
+            generationSchema = try GenerationSchema(pythonModelSchema: json)
+            makeModel = factory
+        }
+
+        let response = Response()
+        //Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
+
+        if let generationSchema, let makeModel {
+            for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
+                response.content = snapshot.content.jsonString
+                let model: PyObject = try makeModel(response.content)
+                response.model = try py.repr(model.reference)
+            }
+        } else {
+            for try await snapshot in session.streamResponse(to: prompt) {
+                response.content = snapshot.content
+            }
         }
 
         response.isComplete = true
         Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
 
-        return response.content
-    }
-
-    /// Produces a structured response to a prompt conforming to the given schema.
-    public func respond(_ prompt: String, schema: PyObject) async throws -> PyObject {
-        guard let json: [String: Any] = schema._schema,
-              let makeModel = schema._from_json else {
-            throw PythonError.ValueError("Invalid schema. Use models.model decorator on a class to create a schema.")
+        if let makeModel {
+            return try makeModel(response.content)
         }
 
-        let response = Response()
-        Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
-
-        let generationSchema = try GenerationSchema(pythonModelSchema: json)
-
-        for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
-            response.content = snapshot.content.jsonString
-            let model: PyObject = try makeModel(response.content)
-            response.model = try py.repr(model.reference)
-        }
-
-        response.isComplete = true
-        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
-
-        return try makeModel(response.content)
+        return PyObject { response.content.toPython($0) }
     }
 }
 
@@ -126,10 +160,13 @@ private struct ResponseContent: View {
 
     var body: some View {
         if !response.content.isEmpty {
-            LogContainerView(tint: .green) {
-                Label("Response", systemImage: "checkmark.circle")
-                    .font(.caption.bold())
+            DisclosureLogContainerView(tint: .green) {
                 ResponseText(response: response)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } label: {
+                Label("Response", systemImage: "checkmark.circle")
+                    .font(.body.bold())
             }
         }
     }
@@ -148,9 +185,7 @@ private struct ResponseText: View {
     @State var response: Response
 
     var body: some View {
-        Text(response.model ?? response.content)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        MarkdownContent(model: Markdown(text: response.model ?? response.content))
             .animation(.default, value: response.content)
     }
 }

@@ -6,20 +6,32 @@
 //
 
 import SwiftPy
+import SwiftPyViews
 import FoundationModels
 import SwiftUI
 
-/// A tool what can be called by an llm.Agent.
+/// A function an ``agents.Agent`` can call, built by the ``agents.tool`` decorator.
 @Scriptable
 @MainActor
 public final class Tool: @preconcurrency FoundationModels.Tool, Sendable {
+    /// The name the model calls the tool by, taken from the function's name.
     public let name: String
+
+    /// What the tool does, taken from the function's docstring. This is what the model reads to decide when to call it.
     public let description: String
+
+    /// The schema of the arguments the model fills in before each call.
     public let parameters: GenerationSchema
+
     internal let makeParams: PyObject
     internal let function: PyObject
     internal let base: PyObject
-    
+
+    /// Creates a tool. Prefer ``agents.tool``, which builds this from a function.
+    ///
+    /// args_type: A class carrying the parameter schema, either a ``modeling.model`` class or one synthesized from the function's annotations.
+    /// function: The callable the tool invokes, taking a single arguments object.
+    /// base: The undecorated function, which calling the tool forwards to.
     public init(argsType: PyObject, function: PyObject, base: PyObject) throws {
         guard let schema: [String: Any] = argsType._schema,
               let makeParams = argsType._from_json else {
@@ -37,8 +49,15 @@ public final class Tool: @preconcurrency FoundationModels.Tool, Sendable {
         self.base = base
     }
 
-    func __call__(params: Unpack) async throws -> PyObject {
-        try py.retain(py.call(base.reference, unpacking: params.values))
+    /// Runs the underlying function, so a tool stays callable without a model.
+    ///
+    /// params: The arguments the undecorated function takes. Await the result.
+    func __call__(params: Unpack) async throws -> PyObject? {
+        let result = try py.retain(py.call(base.reference, unpacking: params.values))
+        guard let task = AsyncTask(result) else { return result }
+
+        try await task.untilCompletes()
+        return task.result
     }
 }
 
@@ -70,15 +89,17 @@ extension Tool {
                 return "\(key)=\(valueStr)"
             }.joined(separator: ", ")
         }()
-        let view = LogContainerView(tint: .orange) {
-            VStack(alignment: .leading, spacing: 2) {
-                Label("\(self.name)(\(paramStr))", systemImage: "wrench.and.screwdriver")
-                    .font(.caption.bold())
-                if let result {
-                    Text(result)
-                        .font(.caption.monospaced())
-                }
+        let view = DisclosureLogContainerView(tint: .orange) {
+            if let result {
+                MarkdownContent(model: Markdown(text: result))
+                    .environment(\.trimsLeadingHeadingPadding, true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
+        } label: {
+            Label("\(self.name)(\(paramStr))", systemImage: "wrench.and.screwdriver")
+                .font(.body.monospaced().bold())
+                .lineLimit(1)
         }
         Interpreter.onDisplay(AnyView(view))
     }
