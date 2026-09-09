@@ -101,6 +101,6 @@ extension Tool {
                 .font(.body.monospaced().bold())
                 .lineLimit(1)
         }
-        Interpreter.onDisplay(AnyView(view))
+        Interpreter.interface.display(AnyView(view))
     }
 }

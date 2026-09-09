@@ -41,7 +41,7 @@ public class Agent {
         )
     }
 
-#if swift(>=6.4)
+#if no
     public init(model: PyObject, instructions: String? = nil, tools: [Tool]? = nil) throws(PythonError) {
         guard #available(anyAppleOS 27, *) else {
             throw .AssertionError("This feature is only supported on iOS 27 and above")
@@ -103,7 +103,7 @@ public class Agent {
         }
 
         let response = Response()
-        //Interpreter.onDisplay(AnyView(PartialResponseContent(response: response)))
+        //Interpreter.interface.display(AnyView(PartialResponseContent(response: response)))
 
         if let generationSchema, let makeModel {
             for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
@@ -118,7 +118,7 @@ public class Agent {
         }
 
         response.isComplete = true
-        Interpreter.onDisplay(AnyView(ResponseContent(response: response)))
+        Interpreter.interface.display(AnyView(ResponseContent(response: response)))
 
         if let makeModel {
             return try makeModel(response.content)
