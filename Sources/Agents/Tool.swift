@@ -65,17 +65,19 @@ extension Tool {
     public func call(arguments: GeneratedContent) async throws -> String {
         let params: PyObject = try makeParams(arguments.jsonString)
 
-        let result: PyObject = try function(params)
+        var result: PyObject? = try function(params)
         if let task = AsyncTask(result) {
             try await task.untilCompletes()
-            let result = try String.cast(task.result?.reference)
-            log(arguments: arguments, result: result)
-            return result
+            result = task.result
         }
 
-        let resultString = try String.cast(result.reference)
-        log(arguments: arguments, result: resultString)
-        return resultString
+        // The model reads text, so a number or a list is fine to return: it
+        // goes through str(), the way print would show it.
+        let text = try result.map { (object) -> String in
+            try py.module("builtins")!.throwing.str(object)
+        } ?? "None"
+        log(arguments: arguments, result: text)
+        return text
     }
 
     private func log(arguments: GeneratedContent, result: String?) {
