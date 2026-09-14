@@ -103,7 +103,6 @@ public class Agent {
         }
 
         let response = Response()
-        //Interpreter.interface.display(AnyView(PartialResponseContent(response: response)))
 
         if let generationSchema, let makeModel {
             for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
@@ -118,7 +117,6 @@ public class Agent {
         }
 
         response.isComplete = true
-        Interpreter.interface.display(AnyView(ResponseContent(response: response)))
 
         if let makeModel {
             return try makeModel(response.content)
