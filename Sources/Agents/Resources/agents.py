@@ -17,7 +17,10 @@ answer = await agent.respond("How warm is London?")
 print(answer)
 ```
 
-Use ``modeling.model`` to ask for a structured answer."""
+Use ``modeling.model`` to ask for a structured answer.
+
+On iOS 27 and later an agent runs on Private Cloud Compute when it is available
+and falls back to the on-device model otherwise."""
 __all__ = ["Agent", "tool"]
 
 import inspect

@@ -3,61 +3,115 @@ import SwiftPyViews
 import SwiftUI
 import FoundationModels
 
-#if swift(>=6.4)
-/// A language model an ``agents.Agent`` runs on, in place of the system default.
-@Scriptable
-@MainActor
-@available(anyAppleOS 27.0, *)
-public class LanguageModel {
-    internal let model: any FoundationModels.LanguageModel
-
-    internal init(model: any FoundationModels.LanguageModel) {
-        self.model = model
-    }
-}
-
-@available(anyAppleOS 27.0, *)
-extension LanguageModel {
-    public convenience init(_ model: any FoundationModels.LanguageModel) {
-        self.init(model: model)
-    }
-}
-#endif
-
 /// A session that holds a conversation with a language model.
 @Scriptable
 @MainActor
 public class Agent {
-    internal let session: FoundationModels.LanguageModelSession
+    private let instructions: String?
+    private let tools: [Tool]
+    private var session: FoundationModels.LanguageModelSession?
+    private var usesPrivateCloudCompute = false
+    // Once a request could not reach Private Cloud Compute, later agents in
+    // this launch start on-device instead of each failing the same way first.
+    private static var privateCloudComputeFailed = false
 
-    /// Starts a session with the on-device system model.
+    private var modelName: String?
+
+    /// The model the session runs on: `"Private Cloud Compute"` or
+    /// `"On-device"`, or `None` before the first response.
+    public var model: String? { modelName }
+
+    /// Starts a session with a language model. On iOS 27 and later this is
+    /// Private Cloud Compute when it is available, otherwise the on-device model.
     ///
     /// instructions: Standing guidance the model follows for every prompt in the session, such as its role and the style to answer in. Defaults to None.
     /// tools: Functions the model may call, each one built by the ``agents.tool`` decorator. Defaults to None.
     public init(instructions: String? = nil, tools: [Tool]? = nil) {
-        self.session = FoundationModels.LanguageModelSession(
-            tools: tools ?? [],
-            instructions: instructions
-        )
+        self.instructions = instructions
+        self.tools = tools ?? []
     }
 
-#if no
-    public init(model: PyObject, instructions: String? = nil, tools: [Tool]? = nil) throws(PythonError) {
-        guard #available(anyAppleOS 27, *) else {
-            throw .AssertionError("This feature is only supported on iOS 27 and above")
+    // Resolved on the first response rather than in init, the async place a
+    // model may also have to ask for credentials.
+    private func resolvedSession() throws(PythonError) -> FoundationModels.LanguageModelSession {
+        if let session {
+            return session
         }
 
-        guard let container = LanguageModel(model) else {
-            throw .TypeError("Invalid model type")
+#if swift(>=6.4)
+        if #available(anyAppleOS 27, *), !Self.privateCloudComputeFailed {
+            let cloud = PrivateCloudComputeLanguageModel()
+            if cloud.isAvailable {
+                let session = FoundationModels.LanguageModelSession(
+                    model: cloud,
+                    tools: tools,
+                    instructions: instructions
+                )
+                self.session = session
+                usesPrivateCloudCompute = true
+                modelName = "Private Cloud Compute"
+                return session
+            }
         }
-
-        session = FoundationModels.LanguageModelSession(
-            model: container.model,
-            tools: tools ?? [],
-            instructions: instructions
-        )
-    }
 #endif
+
+        let onDevice = SystemLanguageModel.default
+        if case let .unavailable(reason) = onDevice.availability {
+            throw .RuntimeError(Self.message(for: reason))
+        }
+
+        let session = FoundationModels.LanguageModelSession(
+            model: onDevice,
+            tools: tools,
+            instructions: instructions
+        )
+        self.session = session
+        usesPrivateCloudCompute = false
+        modelName = "On-device"
+        return session
+    }
+
+    private static func message(for reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
+        switch reason {
+        case .appleIntelligenceNotEnabled:
+            "Apple Intelligence is not enabled."
+        case .deviceNotEligible:
+            "This device does not support Apple Intelligence."
+        case .modelNotReady:
+            "The model is not ready yet."
+        @unknown default:
+            "The model is unavailable."
+        }
+    }
+
+    /// Continues the conversation on the on-device model, from the transcript
+    /// as it was before the failed request so the prompt is not repeated.
+    private func fallBackToDevice(transcript: Transcript) -> FoundationModels.LanguageModelSession {
+        let session = FoundationModels.LanguageModelSession(
+            model: .default,
+            tools: tools,
+            transcript: transcript
+        )
+        self.session = session
+        usesPrivateCloudCompute = false
+        modelName = "On-device"
+        return session
+    }
+
+    /// Whether a failure is about reaching the model rather than about what
+    /// was asked: the on-device model gives the same answer to the latter.
+    private static func canRetryOnDevice(_ error: any Error) -> Bool {
+        guard let generation = error as? LanguageModelSession.GenerationError else {
+            return true
+        }
+        switch generation {
+        case .guardrailViolation, .refusal, .exceededContextWindowSize,
+             .unsupportedGuide, .unsupportedLanguageOrLocale, .decodingFailure:
+            return false
+        default:
+            return true
+        }
+    }
 
     /// Produces a response to a prompt.
     ///
@@ -103,17 +157,19 @@ public class Agent {
         }
 
         let response = Response()
+        var session = try resolvedSession()
+        let transcript = session.transcript
 
-        if let generationSchema, let makeModel {
-            for try await snapshot in session.streamResponse(to: prompt, schema: generationSchema) {
-                response.content = snapshot.content.jsonString
-                let model: PyObject = try makeModel(response.content)
-                response.model = try py.repr(model.reference)
-            }
-        } else {
-            for try await snapshot in session.streamResponse(to: prompt) {
-                response.content = snapshot.content
-            }
+        do {
+            try await stream(prompt, schema: generationSchema, makeModel: makeModel, from: session, into: response)
+        } catch where usesPrivateCloudCompute && Self.canRetryOnDevice(error) {
+            // No network, daily quota reached, the service down, or the app
+            // not yet entitled.
+            Self.privateCloudComputeFailed = true
+            response.content = ""
+            response.model = nil
+            session = fallBackToDevice(transcript: transcript)
+            try await stream(prompt, schema: generationSchema, makeModel: makeModel, from: session, into: response)
         }
 
         response.isComplete = true
@@ -123,6 +179,28 @@ public class Agent {
         }
 
         return PyObject { response.content.toPython($0) }
+    }
+}
+
+extension Agent {
+    private func stream(
+        _ prompt: String,
+        schema: GenerationSchema?,
+        makeModel: PyObject?,
+        from session: FoundationModels.LanguageModelSession,
+        into response: Response
+    ) async throws {
+        if let schema, let makeModel {
+            for try await snapshot in session.streamResponse(to: prompt, schema: schema) {
+                response.content = snapshot.content.jsonString
+                let model: PyObject = try makeModel(response.content)
+                response.model = try py.repr(model.reference)
+            }
+        } else {
+            for try await snapshot in session.streamResponse(to: prompt) {
+                response.content = snapshot.content
+            }
+        }
     }
 }
 
