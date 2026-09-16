@@ -11,9 +11,16 @@ public class Agent {
     private let tools: [Tool]
     private var session: FoundationModels.LanguageModelSession?
     private var usesPrivateCloudCompute = false
-    // Once a request could not reach Private Cloud Compute, later agents in
-    // this launch start on-device instead of each failing the same way first.
-    private static var privateCloudComputeFailed = false
+    // Once a request could not reach Private Cloud Compute, agents started
+    // soon after go on-device instead of each failing the same way first; a
+    // later one tries again, so a dropped connection is not the whole day.
+    private static var privateCloudComputeFailedAt: Date?
+    private static let privateCloudComputeRetryInterval: TimeInterval = 5 * 60
+
+    private static var privateCloudComputeFailedRecently: Bool {
+        guard let failedAt = privateCloudComputeFailedAt else { return false }
+        return Date().timeIntervalSince(failedAt) < privateCloudComputeRetryInterval
+    }
 
     private var modelName: String?
 
@@ -39,7 +46,7 @@ public class Agent {
         }
 
 #if swift(>=6.4)
-        if #available(anyAppleOS 27, *), !Self.privateCloudComputeFailed {
+        if #available(anyAppleOS 27, *), !Self.privateCloudComputeFailedRecently {
             let cloud = PrivateCloudComputeLanguageModel()
             if cloud.isAvailable {
                 let session = FoundationModels.LanguageModelSession(
@@ -96,6 +103,16 @@ public class Agent {
         usesPrivateCloudCompute = false
         modelName = "On-device"
         return session
+    }
+
+    /// The innermost error: the ones around it say "error -1" and little
+    /// else, the inner one carries the code that names the cause.
+    private static func describe(_ error: any Error) -> String {
+        var inner = error as NSError
+        while let next = inner.underlyingErrors.first as NSError? {
+            inner = next
+        }
+        return "\(inner.domain) \(inner.code)"
     }
 
     /// Whether a failure is about reaching the model rather than about what
@@ -164,8 +181,12 @@ public class Agent {
             try await stream(prompt, schema: generationSchema, makeModel: makeModel, from: session, into: response)
         } catch where usesPrivateCloudCompute && Self.canRetryOnDevice(error) {
             // No network, daily quota reached, the service down, or the app
-            // not yet entitled.
-            Self.privateCloudComputeFailed = true
+            // not yet entitled. Said on stderr: the on-device answer reads
+            // differently, and nothing else shows which model answered.
+            Self.privateCloudComputeFailedAt = Date()
+            _ = try? py.module("sys")?.throwing.stderr.write(
+                "Private Cloud Compute did not answer (\(Self.describe(error))); continuing on the on-device model.\n"
+            )
             response.content = ""
             response.model = nil
             session = fallBackToDevice(transcript: transcript)
