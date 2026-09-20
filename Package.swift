@@ -1,10 +1,10 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 
 import PackageDescription
 
 let package = Package(
     name: "swiftpy-llm",
-    platforms: [.macOS(.v26), .iOS(.v26), .visionOS(.v26)],
+    platforms: [.macOS(.v27), .iOS(.v27), .visionOS(.v27)],
     products: [
         .library(
             name: "Agents",

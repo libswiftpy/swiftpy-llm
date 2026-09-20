@@ -45,8 +45,7 @@ public class Agent {
             return session
         }
 
-#if swift(>=6.4)
-        if #available(anyAppleOS 27, *), !Self.privateCloudComputeFailedRecently {
+        if !Self.privateCloudComputeFailedRecently {
             let cloud = PrivateCloudComputeLanguageModel()
             if cloud.isAvailable {
                 let session = FoundationModels.LanguageModelSession(
@@ -60,7 +59,6 @@ public class Agent {
                 return session
             }
         }
-#endif
 
         let onDevice = SystemLanguageModel.default
         if case let .unavailable(reason) = onDevice.availability {
@@ -226,8 +224,7 @@ extension Agent {
         from session: FoundationModels.LanguageModelSession,
         into response: Response
     ) async throws {
-#if swift(>=6.4)
-        if #available(anyAppleOS 27, *), let reasoning, usesPrivateCloudCompute {
+        if let reasoning, usesPrivateCloudCompute {
             let level: ContextOptions.ReasoningLevel = switch reasoning {
             case "light": .light
             case "moderate": .moderate
@@ -248,7 +245,6 @@ extension Agent {
             }
             return
         }
-#endif
         if let schema, let makeModel {
             for try await snapshot in session.streamResponse(to: prompt, schema: schema) {
                 response.content = snapshot.content.jsonString
