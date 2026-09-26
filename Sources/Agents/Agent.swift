@@ -116,12 +116,15 @@ public class Agent {
     /// Whether a failure is about reaching the model rather than about what
     /// was asked: the on-device model gives the same answer to the latter.
     private static func canRetryOnDevice(_ error: any Error) -> Bool {
-        guard let generation = error as? LanguageModelSession.GenerationError else {
+        if error is GeneratedContent.ParsingError {
+            return false
+        }
+        guard let modelError = error as? LanguageModelError else {
             return true
         }
-        switch generation {
-        case .guardrailViolation, .refusal, .exceededContextWindowSize,
-             .unsupportedGuide, .unsupportedLanguageOrLocale, .decodingFailure:
+        switch modelError {
+        case .guardrailViolation, .refusal, .contextSizeExceeded,
+             .unsupportedGenerationGuide, .unsupportedLanguageOrLocale:
             return false
         default:
             return true
