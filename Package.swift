@@ -13,7 +13,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.30.0"),
-        .package(url: "https://github.com/felfoldy/swiftpy-views", branch: "main"),
+        .package(url: "https://github.com/libswiftpy/swiftpy-views", branch: "main"),
     ],
     targets: [
         .target(
