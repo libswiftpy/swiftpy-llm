@@ -58,8 +58,9 @@ extension Skill {
             Capsule()
                 .fill(Color.purple.gradient)
                 .frame(width: 4)
+            // The size of the tool and response labels beside it.
             Label("Activated skill \(name)", systemImage: "lightbulb")
-                .font(.caption.bold())
+                .font(.body.bold())
             Spacer(minLength: 0)
         }
         .padding(8)
