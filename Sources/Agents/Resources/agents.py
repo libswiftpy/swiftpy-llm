@@ -44,7 +44,12 @@ class SystemModelLocation(Enum):
     PRIVATE_CLOUD_COMPUTE = "private-cloud-compute"
 
 
-from agents.native import Agent, History, LanguageModel, Skill, SystemLanguageModel, Tool
+from _agents import Agent, History, LanguageModel, Skill, SystemLanguageModel, Tool
+
+# Report the public module, not the private one they live in.
+for _type in (Agent, History, LanguageModel, Skill, SystemLanguageModel):
+    _type.__module__ = __name__
+del _type
 
 @classmethod
 def _args_from_json(cls, json_str):

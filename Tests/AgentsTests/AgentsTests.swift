@@ -40,6 +40,20 @@ struct AgentsTests {
         #expect(evaluate("_raised(lambda: SystemLanguageModel('on-device'))") == "TypeError")
     }
 
+    @Test func typesReportThePublicModule() async {
+        #expect(evaluate("repr(Agent)") == "<class 'agents.Agent'>")
+        #expect(evaluate("LanguageModel.__module__") == "agents")
+        // Errors raised in C name the type bare, not `builtins.Agent`.
+        await Interpreter.run("""
+        import copy
+        try:
+            copy.deepcopy(Agent())
+        except TypeError as e:
+            _message = str(e)
+        """)
+        #expect(evaluate("_message") == "cannot pickle 'Agent' object")
+    }
+
     @Test func languageModelIsTheAbstractBase() {
         #expect(evaluate("str(isinstance(SystemLanguageModel(), LanguageModel))") == "True")
         #expect(evaluate("_raised(lambda: LanguageModel())") == "TypeError")

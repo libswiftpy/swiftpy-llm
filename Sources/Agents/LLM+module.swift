@@ -2,10 +2,13 @@ import SwiftPy
 
 @MainActor
 public func initialize() {
-    PyBind.module("agents.native") { module in
+    PyBind.module("_agents") { module in
         let base = PyType.LanguageModel.object
         module.LanguageModel = base
-        base.__module__ = module.__name__
+        // As `classes` homes the others; `agents` then moves them all to itself.
+        if base.__module__ as String? == "builtins" {
+            base.__module__ = module.__name__
+        }
 
         module.classes(
             Tool.self,
