@@ -14,6 +14,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.30.0"),
         .package(url: "https://github.com/libswiftpy/swiftpy-views", branch: "main"),
+        // Only beta tags so far, which `from:` doesn't resolve.
+        .package(url: "https://github.com/apple/foundation-models-utilities", exact: "1.1.0-beta1"),
     ],
     targets: [
         .target(
@@ -21,6 +23,7 @@ let package = Package(
             dependencies: [
                 "SwiftPy",
                 .product(name: "SwiftPyViews", package: "swiftpy-views"),
+                .product(name: "FoundationModelsUtilities", package: "foundation-models-utilities"),
             ],
             resources: [
                 .process("Resources")
@@ -28,6 +31,10 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("AnyAppleOSAvailability"),
             ]
+        ),
+        .testTarget(
+            name: "AgentsTests",
+            dependencies: ["Agents"]
         ),
     ]
 )

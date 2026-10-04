@@ -19,13 +19,32 @@ print(answer)
 
 Use ``modeling.model`` to ask for a structured answer.
 
-On iOS 27 and later an agent runs on Private Cloud Compute when it is available
-and falls back to the on-device model otherwise."""
-__all__ = ["Agent", "tool"]
+An agent runs on Private Cloud Compute when it is available and falls back to
+the on-device model otherwise. Pass an ``agents.SystemLanguageModel`` as `model`
+to pick one, ``agents.Skill`` objects as `skills` for guidance the model takes up
+only when needed, and an ``agents.History`` as `history` to keep long
+conversations within the model's context.
+
+```python
+from agents import Agent, History, SystemLanguageModel
+
+agent = Agent(model=SystemLanguageModel.on_device(), history=History(rolling_window=10))
+```"""
+__all__ = ["Agent", "History", "LanguageModel", "Skill", "SystemLanguageModel", "SystemModelLocation", "tool"]
 
 import inspect
+from enum import Enum
 from typing import Any, Callable
-from agents.native import Agent, Tool
+
+
+class SystemModelLocation(Enum):
+    """Where a ``agents.SystemLanguageModel`` runs."""
+    AUTOMATIC = "automatic"
+    ON_DEVICE = "on-device"
+    PRIVATE_CLOUD_COMPUTE = "private-cloud-compute"
+
+
+from agents.native import Agent, History, LanguageModel, Skill, SystemLanguageModel, Tool
 
 @classmethod
 def _args_from_json(cls, json_str):
