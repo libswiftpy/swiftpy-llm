@@ -8,7 +8,7 @@ model call it.
 from agents import Agent, tool
 
 @tool
-async def temperature(city: str) -> str:
+def temperature(city: str) -> str:
     '''Look up the current temperature in a city.'''
     return "22 °C"
 
