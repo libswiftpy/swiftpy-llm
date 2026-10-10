@@ -22,15 +22,15 @@ public class Agent {
     /// The model the agent runs on.
     public let model: LanguageModel
 
-    /// The model that answered: `"Private Cloud Compute"` or `"On-device"`,
-    /// or `None` before the first response.
+    /// The model that answered: `"Private Cloud Compute"`, `"On-device"`, or a
+    /// Claude model's ID, or `None` before the first response.
     public var modelName: String? { answeredBy }
 
     /// Starts a session with a language model.
     ///
     /// instructions: Standing guidance the model follows for every prompt in the session, such as its role and the style to answer in. Defaults to None.
     /// tools: Functions the model may call, each one built by the ``agents.tool`` decorator. Defaults to None.
-    /// model: The model to run on. Defaults to None, a ``agents.SystemLanguageModel``: Private Cloud Compute when it is available, the on-device model otherwise.
+    /// model: The model to run on, such as ``claude.sonnet()``. Defaults to None, a ``agents.SystemLanguageModel``: Private Cloud Compute when it is available, the on-device model otherwise.
     /// skills: Guidance the model takes up only when a request needs it, each a ``agents.Skill``. Defaults to None.
     /// history: How a long conversation is kept within the model's context, a ``agents.History``. Defaults to None, keeping all of it.
     public init(
@@ -75,7 +75,7 @@ public class Agent {
     ///
     /// prompt: What to ask the model.
     /// schema: A class decorated with ``modeling.model``, to answer with an instance of it instead of text. Its annotated fields are the structure the model fills in, and defaults on them are offered to the model as defaults. Defaults to None.
-    /// reasoning: How much the model thinks before answering: "light", "moderate", or "deep". Only Private Cloud Compute reasons, so the on-device model ignores it. Defaults to None, the service's own default.
+    /// reasoning: How much the model thinks before answering: "light", "moderate", or "deep". The on-device model doesn't reason, so it ignores it. Defaults to None, the service's own default.
     ///
     /// Returns a str, or an instance of `schema` where one is given, whose
     /// fields are then read as ordinary attributes. The response streams into

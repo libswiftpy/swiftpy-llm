@@ -56,7 +56,7 @@ extension SystemLanguageModel: CustomStringConvertible {
 }
 
 extension SystemLanguageModel: ModelProvider {
-    func resolve() throws(PythonError) -> (model: any FoundationModels.LanguageModel, name: String, reasons: Bool) {
+    package func resolve() throws(PythonError) -> (model: any FoundationModels.LanguageModel, name: String, reasons: Bool) {
         if location != .onDevice {
             let cloud = PrivateCloudComputeLanguageModel()
             if location == .privateCloudCompute {
@@ -77,7 +77,7 @@ extension SystemLanguageModel: ModelProvider {
         return (onDevice, "On-device", false)
     }
 
-    func fallback(
+    package func fallback(
         after error: any Error,
         on model: any FoundationModels.LanguageModel
     ) -> (model: any FoundationModels.LanguageModel, name: String)? {

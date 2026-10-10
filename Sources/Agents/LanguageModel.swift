@@ -10,10 +10,10 @@ import FoundationModels
 extension PyType {
     /// The base of the models an ``agents.Agent`` runs on; only its subclasses
     /// are made.
-    static let LanguageModel: PyType = .make("LanguageModel") { type in
+    package static let LanguageModel: PyType = .make("LanguageModel") { type in
         type.function("__new__(cls, *args, **kwargs)") { _, _ in
             PyAPI.return {
-                throw PythonError.TypeError("LanguageModel can't be instantiated; use SystemLanguageModel")
+                throw PythonError.TypeError("LanguageModel can't be instantiated; use one of its subclasses")
             }
         }
     }
@@ -22,7 +22,7 @@ extension PyType {
 /// What a model gives an agent: FoundationModels' own, which the agent builds
 /// its sessions from.
 @MainActor
-protocol ModelProvider: PythonBindable {
+package protocol ModelProvider: PythonBindable {
     /// The model for a new session, its name, and whether it takes a reasoning level.
     func resolve() throws(PythonError) -> (model: any FoundationModels.LanguageModel, name: String, reasons: Bool)
 
@@ -38,17 +38,25 @@ protocol ModelProvider: PythonBindable {
 @MainActor
 public struct LanguageModel {
     let provider: any ModelProvider
+
+    package init(provider: any ModelProvider) {
+        self.provider = provider
+    }
+
+    /// The subclasses Python may pass; another target adds its own.
+    package static var providerTypes: [any ModelProvider.Type] = [SystemLanguageModel.self]
 }
 
 extension LanguageModel: PythonConvertible {
     public static var pyType: PyType { .LanguageModel }
 
     public static func isConvertible(_ reference: PyRef) -> Bool {
-        SystemLanguageModel.isConvertible(reference)
+        providerTypes.contains { $0.isConvertible(reference) }
     }
 
     public static func fromPython(_ reference: PyRef) -> LanguageModel {
-        LanguageModel(provider: SystemLanguageModel.fromPython(reference))
+        let type = providerTypes.first { $0.isConvertible(reference) } ?? SystemLanguageModel.self
+        return LanguageModel(provider: type.fromPython(reference))
     }
 
     public func toPython() throws(PythonError) -> PyObject {
