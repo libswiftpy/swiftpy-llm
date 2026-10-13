@@ -4,12 +4,14 @@
 //
 
 import SwiftUI
+import SwiftPyViews
 
 struct DisclosureLogContainerView<Label: View, Content: View>: View {
     let tint: Color
     private let label: Label
     private let content: Content
     @State private var isExpanded = false
+    @Environment(\.isInWindow) private var isInWindow
 
     init(
         tint: Color,
@@ -53,7 +55,26 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
             }
         }
         .padding(8)
-        .background(tint.opacity(0.1))
-        .padding(-8)
+        .modifier(Background(tint: tint, isInWindow: isInWindow))
+    }
+}
+
+// Edge to edge in a card's output, out through the padding the card gives it;
+// in a window, rounded to follow the corners around it.
+private struct Background: ViewModifier {
+    let tint: Color
+    let isInWindow: Bool
+
+    func body(content: Content) -> some View {
+        if isInWindow {
+            content.background(
+                tint.opacity(0.1),
+                in: ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
+            )
+        } else {
+            content
+                .background(tint.opacity(0.1))
+                .padding(-8)
+        }
     }
 }
