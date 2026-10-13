@@ -64,7 +64,7 @@ extension Skill {
             Spacer(minLength: 0)
         }
         .padding(8)
-        .background(Color.purple.opacity(0.1))
+        .background(Color.purple.opacity(0.1), in: .rect)
         .padding(-8)
         Interpreter.interface.display(AnyView(view))
     }

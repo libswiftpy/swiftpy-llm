@@ -72,8 +72,9 @@ private struct Background: ViewModifier {
                 in: ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
             )
         } else {
+            // A bare background would follow the card's container shape.
             content
-                .background(tint.opacity(0.1))
+                .background(tint.opacity(0.1), in: .rect)
                 .padding(-8)
         }
     }
