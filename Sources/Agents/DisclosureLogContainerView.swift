@@ -8,6 +8,8 @@ import SwiftPyViews
 
 struct DisclosureLogContainerView<Label: View, Content: View>: View {
     let tint: Color
+    /// Shows a progress indicator in place of the chevron, and doesn't expand.
+    let isInProgress: Bool
     private let label: Label
     private let content: Content
     @State private var isExpanded = false
@@ -15,10 +17,12 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
 
     init(
         tint: Color,
+        isInProgress: Bool = false,
         @ViewBuilder content: () -> Content,
         @ViewBuilder label: () -> Label
     ) {
         self.tint = tint
+        self.isInProgress = isInProgress
         self.content = content()
         self.label = label()
     }
@@ -31,6 +35,8 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Button {
+                    // Not disabled, which would dim the label.
+                    guard !isInProgress else { return }
                     withAnimation {
                         isExpanded.toggle()
                     }
@@ -40,10 +46,15 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
 
                         Spacer(minLength: 0)
 
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.caption.bold())
-                            .contentTransition(.symbolEffect(.replace))
-                            .accessibilityHidden(true)
+                        if isInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption.bold())
+                                .contentTransition(.symbolEffect(.replace))
+                                .accessibilityHidden(true)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
