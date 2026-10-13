@@ -53,7 +53,7 @@ public final class Tool: @preconcurrency FoundationModels.Tool, Sendable {
     ///
     /// params: The arguments the undecorated function takes. Await the result.
     func __call__(params: Unpack) async throws -> PyObject? {
-        let result = try py.retain(py.call(base.reference, unpacking: params.values))
+        let result = try await invoke(base, arguments: params.values)
         guard let task = AsyncTask(result) else { return result }
 
         try await task.untilCompletes()
@@ -65,7 +65,7 @@ extension Tool {
     public func call(arguments: GeneratedContent) async throws -> String {
         let params: PyObject = try makeParams(arguments.jsonString)
 
-        var result: PyObject? = try function(params)
+        var result: PyObject? = try await invoke(function, arguments: [params])
         if let task = AsyncTask(result) {
             try await task.untilCompletes()
             result = task.result
@@ -78,6 +78,13 @@ extension Tool {
         } ?? "None"
         log(arguments: arguments, result: text)
         return text
+    }
+
+    // On the Python thread, as a cell runs, so a blocking call like
+    // requests.get can wait there; main can't.
+    @PythonActor
+    private func invoke(_ function: PyObject, arguments: [PyObject]) throws -> PyObject {
+        try PyRuntime.call(function, arguments: arguments)
     }
 
     private func log(arguments: GeneratedContent, result: String?) {
