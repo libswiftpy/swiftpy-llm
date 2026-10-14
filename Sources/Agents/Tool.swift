@@ -126,7 +126,13 @@ extension Tool {
         return (try? title.value(String.self), rest)
     }
 
-    public func call(arguments: GeneratedContent) async throws -> String {
+    public func call(arguments: GeneratedContent) async throws -> FoundationModels.Prompt {
+        let parts = try await respond(to: arguments)
+        return FoundationModels.Prompt { parts.map(\.prompt) }
+    }
+
+    /// What the model gets back from a call: text, with images among it.
+    func respond(to arguments: GeneratedContent) async throws -> [ToolResultPart] {
         let (title, arguments) = Self.splitTitle(from: arguments)
         let params: PyObject = try makeParams(arguments.jsonString)
 
@@ -137,24 +143,46 @@ extension Tool {
 
         do {
             let result = try await awaited(invoke(function, arguments: [params]))
-
-            // The model reads text, so a number or a list is fine to return: it
-            // goes through str(), the way print would show it.
-            let text = try result.map { (object) -> String in
-                try py.module("builtins")!.throwing.str(object)
-            } ?? "None"
-            log.output = await outputView(of: result, text: text)
-            return text
+            let parts = try Self.parts(of: result)
+            log.output = await outputView(of: result, parts: parts)
+            return parts
         } catch let error as PythonError where error.type != "KeyboardInterrupt" {
             // Handed back as the result, so the model can see what went wrong
             // and try again, rather than its whole response failing.
             let text = Self.failureText(of: error)
-            log.failure = text
-            return text
+            log.output = Self.outputBlock(text, keepingEnd: true)
+            return [.text(text)]
         } catch {
-            log.failure = Self.failureText(of: error)
+            log.output = Self.outputBlock(Self.failureText(of: error), keepingEnd: true)
             throw error
         }
+    }
+
+    /// A `views.Image` is sent as an image, and so is one in a list or tuple,
+    /// with the other items as text. Anything else goes through str(), the way
+    /// print would show it, so a number or a list is fine to return.
+    static func parts(of result: PyObject?) throws -> [ToolResultPart] {
+        guard let result else { return [.text("None")] }
+        if isImage(result) {
+            return [try .image(result)]
+        }
+        if ["list", "tuple"].contains(result.typeName),
+           let items = [PyObject](try builtins.throwing.list(result) as PyObject),
+           items.contains(where: isImage) {
+            return try items.map { isImage($0) ? try .image($0) : .text(try str($0)) }
+        }
+        return [.text(try str(result))]
+    }
+
+    private static var builtins: PyModule { py.module("builtins")! }
+
+    private static func str(_ object: PyObject) throws -> String {
+        try builtins.throwing.str(object)
+    }
+
+    private static func isImage(_ object: PyObject) -> Bool {
+        guard let type = py.module("views")?.Image.flatMap({ PyType($0) }) else { return false }
+        return type.isInstance(object.reference)
     }
 
     /// What `result` comes to: awaited, when it's a coroutine or a task.
@@ -169,6 +197,23 @@ extension Tool {
         let longest = text.matches(of: /`+/).map(\.output.count).max() ?? 0
         let fence = String(repeating: "`", count: max(3, longest + 1))
         return "\(fence)\n\(text.trimmingCharacters(in: .newlines))\n\(fence)"
+    }
+
+    /// `text` in a code block, cut to `lineLimit` lines so a long result opens
+    /// quickly; the model still reads all of it. A traceback keeps its end.
+    static func outputBlock(_ text: String, keepingEnd: Bool = false) -> AnyView {
+        AnyView(MarkdownContent(model: Markdown(text: codeBlock(preview(text, keepingEnd: keepingEnd)))))
+    }
+
+    static let lineLimit = 20
+
+    static func preview(_ text: String, keepingEnd: Bool = false) -> String {
+        let lines = text.trimmingCharacters(in: .newlines).split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > lineLimit else { return text }
+        let hidden = "… \(lines.count - lineLimit) more lines"
+        return keepingEnd
+            ? ([Substring(hidden)] + lines.suffix(lineLimit)).joined(separator: "\n")
+            : (lines.prefix(lineLimit) + [Substring(hidden)]).joined(separator: "\n")
     }
 
     /// What a tool raised as `agents` formats it, or else the traceback
@@ -198,9 +243,12 @@ extension Tool {
         }
     }
 
-    /// The result as `output` formatted it, or its text in a code block.
-    private func outputView(of result: PyObject?, text: String) async -> AnyView {
-        let plain = AnyView(MarkdownContent(model: Markdown(text: Self.codeBlock(text))))
+    /// The result as `output` formatted it, or its text in code blocks, and its images.
+    private func outputView(of result: PyObject?, parts: [ToolResultPart]) async -> AnyView {
+        let views = parts.map(\.view)
+        let plain = views.count == 1 ? views[0] : AnyView(VStack(alignment: .leading, spacing: 8) {
+            ForEach(views.indices, id: \.self) { views[$0] }
+        })
         guard let formatOutput else { return plain }
         do {
             return try Self.formatted(await invoke(formatOutput, arguments: [result ?? .none]), by: "output")
@@ -237,13 +285,38 @@ extension Tool {
     }
 }
 
+/// A piece of what a call returned, as the model gets it.
+enum ToolResultPart {
+    case text(String)
+    case image(PyObject, FoundationModels.Attachment<ImageAttachmentContent>)
+
+    @MainActor
+    static func image(_ object: PyObject) throws -> ToolResultPart {
+        .image(object, try Agent.attachment(object))
+    }
+
+    var prompt: FoundationModels.Prompt {
+        switch self {
+        case .text(let text): FoundationModels.Prompt(text)
+        case .image(_, let attachment): FoundationModels.Prompt(attachment)
+        }
+    }
+
+    @MainActor
+    var view: AnyView {
+        switch self {
+        case .text(let text): Tool.outputBlock(text)
+        case .image(let object, _): object.reference.view ?? AnyView(EmptyView())
+        }
+    }
+}
+
 /// A call's state, as its log shows it.
 @MainActor
 @Observable
 private final class ToolCallLog {
     var isRunning = true
     var output: AnyView?
-    var failure: String?
 }
 
 private struct ToolCallView: View {
@@ -259,12 +332,6 @@ private struct ToolCallView: View {
                 output
                     .environment(\.trimsLeadingHeadingPadding, true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            if let failure = log.failure {
-                Text(failure)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
         } label: {

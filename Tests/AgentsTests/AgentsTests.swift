@@ -100,7 +100,7 @@ struct AgentsTests {
         #expect(schema.contains(#""x-order":["call-title","a","b"]"#), "\(schema)")
 
         let arguments = try GeneratedContent(json: #"{"call-title": "Add them", "a": 1, "b": 2}"#)
-        #expect(try await tool.call(arguments: arguments) == "3")
+        #expect(try await tool.text(arguments: arguments) == "3")
     }
 
     @Test func aTitleParameterIsTheFunctionsOwn() async throws {
@@ -112,7 +112,7 @@ struct AgentsTests {
         """)
         let tool = try Tool.cast(try #require(py.main._note))
         let arguments = try GeneratedContent(json: #"{"call-title": "Save a note", "title": "Groceries", "body": "milk"}"#)
-        #expect(try await tool.call(arguments: arguments) == "Groceries: milk")
+        #expect(try await tool.text(arguments: arguments) == "Groceries: milk")
     }
 
     @Test func inputFormatsWithTheToolsArguments() async throws {
@@ -158,15 +158,15 @@ struct AgentsTests {
         #expect(evaluate("str(_greet_input.__name__)") == "_greet_input")
 
         let greet = try Tool.cast(try #require(py.main._greet))
-        #expect(try await greet.call(arguments: GeneratedContent(json: #"{"call-title": "Greet", "name": "Ada", "times": 2}"#)) == "hi hi Ada")
+        #expect(try await greet.text(arguments: GeneratedContent(json: #"{"call-title": "Greet", "name": "Ada", "times": 2}"#)) == "hi hi Ada")
 
         let search = try Tool.cast(try #require(py.main._search))
-        #expect(try await search.call(arguments: GeneratedContent(json: #"{"text": "swift"}"#)) == "swift")
+        #expect(try await search.text(arguments: GeneratedContent(json: #"{"text": "swift"}"#)) == "swift")
         #expect(evaluate("str(_seen)") == "[('Ada', 2), 'swift']")
 
         // A formatter that raises leaves the call itself alone.
         let fails = try Tool.cast(try #require(py.main._fails))
-        #expect(try await fails.call(arguments: GeneratedContent(json: #"{"x": 7}"#)) == "7")
+        #expect(try await fails.text(arguments: GeneratedContent(json: #"{"x": 7}"#)) == "7")
     }
 
     @Test func toolTakesItsInputFormatter() async throws {
@@ -184,11 +184,11 @@ struct AgentsTests {
             return x
         """)
         let run = try Tool.cast(try #require(py.main._run))
-        #expect(try await run.call(arguments: GeneratedContent(json: #"{"code": "print(1)"}"#)) == "PRINT(1)")
+        #expect(try await run.text(arguments: GeneratedContent(json: #"{"code": "print(1)"}"#)) == "PRINT(1)")
         #expect(evaluate("str(_formatted)") == "['print(1)']")
 
         let plain = try Tool.cast(try #require(py.main._plain))
-        #expect(try await plain.call(arguments: GeneratedContent(json: #"{"x": 3}"#)) == "3")
+        #expect(try await plain.text(arguments: GeneratedContent(json: #"{"x": 3}"#)) == "3")
     }
 
     @Test func aFailingToolReturnsItsTraceback() async throws {
@@ -199,7 +199,7 @@ struct AgentsTests {
             return a / b
         """)
         let divide = try Tool.cast(try #require(py.main._divide))
-        let text = try await divide.call(arguments: GeneratedContent(json: #"{"a": 1, "b": 0}"#))
+        let text = try await divide.text(arguments: GeneratedContent(json: #"{"a": 1, "b": 0}"#))
         #expect(text.contains("Traceback"), "\(text)")
         #expect(text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("ZeroDivisionError: division by zero"), "\(text)")
         #expect(!text.contains("\u{1B}["), "\(text)")
@@ -217,12 +217,12 @@ struct AgentsTests {
             return "ok"
         """)
         let tool = try Tool.cast(try #require(py.main._exec))
-        let text = try await tool.call(arguments: GeneratedContent(json: #"{"code": "import no_such_module"}"#))
+        let text = try await tool.text(arguments: GeneratedContent(json: #"{"code": "import no_such_module"}"#))
         #expect(text.contains("File \"<string>\", line 1"), "\(text)")
         #expect(text.contains("ModuleNotFoundError"), "\(text)")
         #expect(!text.contains("in _exec") && !text.contains("_awaited"), "\(text)")
 
-        let invalid = try await tool.call(arguments: GeneratedContent(json: #"{"code": "x = (1"}"#))
+        let invalid = try await tool.text(arguments: GeneratedContent(json: #"{"code": "x = (1"}"#))
         #expect(invalid.contains("SyntaxError"), "\(invalid)")
         #expect(!invalid.contains("in _exec"), "\(invalid)")
     }
@@ -238,7 +238,7 @@ struct AgentsTests {
             return _lookup(name)
         """)
         let tool = try Tool.cast(try #require(py.main._docs))
-        let text = try await tool.call(arguments: GeneratedContent(json: #"{"name": "nope"}"#))
+        let text = try await tool.text(arguments: GeneratedContent(json: #"{"name": "nope"}"#))
         #expect(text.contains("in _docs") && text.contains("in _lookup"), "\(text)")
         #expect(text.contains("KeyError: 'nope'"), "\(text)")
     }
@@ -264,11 +264,11 @@ struct AgentsTests {
         """)
         let stats = try Tool.cast(try #require(py.main._stats))
         // The model still reads str() of the result.
-        #expect(try await stats.call(arguments: GeneratedContent(json: #"{"n": 2}"#)) == "{'n': 2}")
+        #expect(try await stats.text(arguments: GeneratedContent(json: #"{"n": 2}"#)) == "{'n': 2}")
 
         // A formatter that raises leaves the result alone.
         let docs = try Tool.cast(try #require(py.main._docs))
-        #expect(try await docs.call(arguments: GeneratedContent(json: #"{"name": "views"}"#)) == "# views")
+        #expect(try await docs.text(arguments: GeneratedContent(json: #"{"name": "views"}"#)) == "# views")
 
         // Formatters get the returned object itself, not its text.
         #expect(evaluate("str(_outputs)") == "[{'n': 2}, '# views']")
@@ -277,6 +277,13 @@ struct AgentsTests {
     @Test func resultsShowInAPlainCodeBlock() {
         #expect(Tool.codeBlock("a\nb\n") == "```\na\nb\n```")
         #expect(Tool.codeBlock("x ```py y") == "````\nx ```py y\n````")
+
+        // The log previews a long result: the start of output, the end of a traceback.
+        let long = (1...25).map(String.init).joined(separator: "\n")
+        #expect(Tool.preview("a\nb") == "a\nb")
+        #expect(Tool.preview(long).hasPrefix("1\n2\n"))
+        #expect(Tool.preview(long).hasSuffix("20\n… 5 more lines"))
+        #expect(Tool.preview(long, keepingEnd: true) == "… 5 more lines\n" + (6...25).map(String.init).joined(separator: "\n"))
     }
 
     @Test func splitsTheTitleFromTheArguments() throws {
@@ -330,6 +337,42 @@ struct AgentsTests {
         #expect(evaluate("_respond") == "TypeError")
     }
 
+    @Test func toolsReturnImagesAmongText() async throws {
+        SwiftPyViews.initialize()
+        await Interpreter.run("""
+        import base64
+        from views import Image
+        _png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+
+        @tool
+        def _picture(kind: str):
+            "Returns a picture."
+            return {
+                "image": Image(_png),
+                "mixed": ["Before", Image(_png), 2, Image(_png)],
+                "tuple": (Image(_png), "after"),
+                "text": ["a", 1],
+                "symbol": Image.system("star"),
+            }[kind]
+        """)
+        let picture = try Tool.cast(try #require(py.main._picture))
+        func parts(_ kind: String) async throws -> String {
+            try await picture.respond(to: GeneratedContent(json: #"{"kind": "\#(kind)"}"#)).map {
+                switch $0 {
+                case .text(let text): text
+                case .image: "<image>"
+                }
+            }.joined(separator: "|")
+        }
+        #expect(try await parts("image") == "<image>")
+        #expect(try await parts("mixed") == "Before|<image>|2|<image>")
+        #expect(try await parts("tuple") == "<image>|after")
+        // Without an image, a list is text, as before.
+        #expect(try await parts("text") == "['a', 1]")
+        // An image without pixels goes back to the model as the error.
+        #expect(try await parts("symbol").contains("ValueError"))
+    }
+
     private func transcripts(of agent: Agent, prompts: [String]) async throws -> [Transcript] {
         let recorder = TranscriptRecorder()
         let session = LanguageModelSession(profile: agent.profile(for: MockModel(text: "OK", recorder: recorder)))
@@ -362,5 +405,14 @@ struct AgentsTests {
         let agent = Agent(instructions: "Be brief.", history: try History(summarizeAfter: 2))
         let seen = try await transcripts(of: agent, prompts: ["one", "two", "three"])
         #expect(isInstructions(seen.last?.first), "\(String(describing: seen.last))")
+    }
+}
+
+extension Agents.Tool {
+    // What the model reads back from a call, as text.
+    func text(arguments: GeneratedContent) async throws -> String {
+        try await respond(to: arguments).map {
+            if case .text(let text) = $0 { text } else { "<image>" }
+        }.joined()
     }
 }

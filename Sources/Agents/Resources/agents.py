@@ -108,7 +108,8 @@ def tool(
 
     Annotate every parameter: the annotations become the schema the model fills
     in. The function may be a coroutine, and whatever it returns is converted to
-    a string for the model.
+    a string for the model. A ``views.Image``, or a list of text and images, reaches
+    the model as images, for models that can see them.
 
     ```python
     from agents import Agent, tool
