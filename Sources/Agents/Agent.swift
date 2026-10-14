@@ -3,6 +3,7 @@ import SwiftPyViews
 import SwiftUI
 import FoundationModels
 import FoundationModelsUtilities
+import ImageIO
 
 /// A session that holds a conversation with a language model.
 @Scriptable
@@ -76,6 +77,7 @@ public class Agent {
     /// prompt: What to ask the model.
     /// schema: A class decorated with ``modeling.model``, to answer with an instance of it instead of text. Its annotated fields are the structure the model fills in, and defaults on them are offered to the model as defaults. Defaults to None.
     /// reasoning: How much the model thinks before answering: "light", "moderate", or "deep". The on-device model doesn't reason, so it ignores it. Defaults to None, the service's own default.
+    /// images: Images the model sees after the prompt: each a ``views.Image``, or PNG or JPEG bytes. Defaults to None.
     ///
     /// Returns a str, or an instance of `schema` where one is given, whose
     /// fields are then read as ordinary attributes. The response streams into
@@ -98,8 +100,10 @@ public class Agent {
     ///
     /// recipe = await agent.respond("A quick pasta dish", schema=Recipe)
     /// print(recipe.title)
+    ///
+    /// text = await agent.respond("What's in this photo?", images=[photo])
     /// ```
-    public func respond(_ prompt: String, schema: PyObject? = nil, reasoning: String? = nil) async throws -> PyObject {
+    public func respond(_ prompt: String, schema: PyObject? = nil, reasoning: String? = nil, images: [PyObject]? = nil) async throws -> PyObject {
         // Validated before anything is displayed, so a bad schema leaves no
         // "generating" card behind.
         var generationSchema: GenerationSchema?
@@ -116,6 +120,11 @@ public class Agent {
         }
 
         let reasoningLevel = try Self.reasoningLevel(named: reasoning)
+        let attachments = try (images ?? []).map(Self.attachment)
+        let prompt = FoundationModels.Prompt {
+            prompt
+            attachments
+        }
 
         let response = Response()
         var session = try resolvedSession()
@@ -177,8 +186,25 @@ extension Agent {
         return name
     }
 
+    /// An image the model sees: bytes, or anything with `png()`, like a ``views.Image``.
+    static func attachment(_ image: PyObject) throws -> FoundationModels.Attachment<ImageAttachmentContent> {
+        let data: Data
+        if let bytes = Data(image) {
+            data = bytes
+        } else if let png = try? image.throwing.png {
+            data = try png()
+        } else {
+            throw PythonError.TypeError("images must be views.Image or bytes, not \(image.typeName)")
+        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw PythonError.ValueError("images must be image data, like PNG or JPEG bytes")
+        }
+        return FoundationModels.Attachment(cgImage)
+    }
+
     private func stream(
-        _ prompt: String,
+        _ prompt: FoundationModels.Prompt,
         schema: GenerationSchema?,
         makeModel: PyObject?,
         reasoning: String?,

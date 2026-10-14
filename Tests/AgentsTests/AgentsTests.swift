@@ -7,6 +7,7 @@ import Testing
 import Foundation
 import FoundationModels
 import SwiftPy
+import SwiftPyViews
 @testable import Agents
 
 /// What needs no Apple Intelligence: arguments, and the profile a session is
@@ -292,6 +293,43 @@ struct AgentsTests {
     // MARK: - Profile
 
     /// The transcripts the model saw over `prompts`.
+    @Test func takesImagesAsBytesOrViews() async throws {
+        SwiftPyViews.initialize()
+        await Interpreter.run("""
+        import base64
+        from views import Image
+        _png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+        _view = Image(_png)
+        _symbol = Image.system("star")
+        """)
+        _ = try Agent.attachment(try #require(py.main._png))
+        _ = try Agent.attachment(try #require(py.main._view))
+
+        func raised(_ expression: String) -> String? {
+            do {
+                _ = try Agent.attachment(try #require(Interpreter.evaluate(expression) as PyObject?))
+                return nil
+            } catch let error as PythonError {
+                return error.type
+            } catch {
+                return "\(error)"
+            }
+        }
+        #expect(raised("42") == "TypeError")
+        #expect(raised("b'not an image'") == "ValueError")
+        #expect(raised("_symbol") == "ValueError")
+
+        // Checked before the model is asked anything.
+        await Interpreter.run("""
+        try:
+            await Agent().respond("What's this?", images=[42])
+            _respond = None
+        except Exception as e:
+            _respond = type(e).__name__
+        """)
+        #expect(evaluate("_respond") == "TypeError")
+    }
+
     private func transcripts(of agent: Agent, prompts: [String]) async throws -> [Transcript] {
         let recorder = TranscriptRecorder()
         let session = LanguageModelSession(profile: agent.profile(for: MockModel(text: "OK", recorder: recorder)))
