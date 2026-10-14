@@ -34,7 +34,7 @@ __all__ = ["Agent", "History", "LanguageModel", "Skill", "SystemLanguageModel", 
 
 import inspect
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, overload
 
 
 class SystemModelLocation(Enum):
@@ -78,6 +78,21 @@ def _resolve(ann):
 def _type_name(ann):
     return ann.__name__ if hasattr(ann, '__name__') else str(ann)
 
+# Bare, it makes the tool; with only keywords, a decorator that does.
+@overload
+def tool(
+    fn: Callable[..., Any],
+    *,
+    input: Callable[..., Any] | None = None,
+    output: Callable[[Any], Any] | None = None,
+) -> Tool: ...
+@overload
+def tool(
+    fn: None = None,
+    *,
+    input: Callable[..., Any] | None = None,
+    output: Callable[[Any], Any] | None = None,
+) -> Callable[[Callable[..., Any]], Tool]: ...
 def tool(
     fn: Callable[..., Any] | None = None,
     *,
