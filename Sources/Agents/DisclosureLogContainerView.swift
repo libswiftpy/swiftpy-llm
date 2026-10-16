@@ -36,16 +36,16 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
             Capsule()
                 .fill(tint.gradient)
                 .frame(width: 4)
+                // Wider to tap than it is, as thin as it looks.
+                .padding(.horizontal, 8)
+                .contentShape(.rect)
+                .padding(.horizontal, -8)
+                .onTapGesture(perform: toggle)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Button {
-                        // Not disabled, which would dim the label.
-                        guard !isInProgress else { return }
-                        withAnimation {
-                            isExpanded.toggle()
-                        }
-                    } label: {
+                    Button(action: toggle) {
                         HStack(spacing: 8) {
                             label
 
@@ -83,6 +83,14 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
         }
         .padding(8)
         .modifier(Background(tint: tint, isInWindow: isInWindow))
+    }
+
+    private func toggle() {
+        // Not disabled, which would dim the label.
+        guard !isInProgress else { return }
+        withAnimation {
+            isExpanded.toggle()
+        }
     }
 }
 
