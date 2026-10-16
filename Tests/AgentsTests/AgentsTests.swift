@@ -280,10 +280,9 @@ struct AgentsTests {
 
         // The log previews a long result: the start of output, the end of a traceback.
         let long = (1...25).map(String.init).joined(separator: "\n")
-        #expect(Tool.preview("a\nb") == "a\nb")
-        #expect(Tool.preview(long).hasPrefix("1\n2\n"))
-        #expect(Tool.preview(long).hasSuffix("20\n… 5 more lines"))
-        #expect(Tool.preview(long, keepingEnd: true) == "… 5 more lines\n" + (6...25).map(String.init).joined(separator: "\n"))
+        #expect(Tool.preview("a\nb") == ("a\nb", 0))
+        #expect(Tool.preview(long) == ((1...10).map(String.init).joined(separator: "\n"), 15))
+        #expect(Tool.preview(long, keepingEnd: true) == ((16...25).map(String.init).joined(separator: "\n"), 15))
     }
 
     @Test func splitsTheTitleFromTheArguments() throws {
@@ -415,6 +414,55 @@ struct AgentsTests {
         #expect(log.cancel == nil)
     }
 
+    @Test func whatACallPrintsReachesTheModel() async throws {
+        await Interpreter.run("""
+        @tool
+        def chatty(n: int) -> int:
+            \"\"\"Count.\"\"\"
+            print("counting")
+            return n + 1
+
+        @tool
+        def quiet() -> None:
+            \"\"\"Print only.\"\"\"
+            print("only this")
+        """)
+        let chatty: Agents.Tool = try #require(py.main.chatty)
+        let log = ToolCallLog()
+        let parts = try await chatty.respond(to: GeneratedContent(json: #"{"n": 1}"#), log: log)
+        #expect(parts.map { if case .text(let text) = $0 { text } else { "<image>" } } == ["counting\n", "2"])
+        #expect(log.printed == "counting\n")
+
+        // Nothing returned, so only what it printed.
+        let quiet: Agents.Tool = try #require(py.main.quiet)
+        #expect(try await quiet.text(arguments: GeneratedContent(json: "{}")) == "only this\n")
+    }
+
+    @Test func aStoppedCallStillGivesWhatItPrinted() async throws {
+        await Interpreter.run("""
+        import time
+
+        @tool
+        def slow() -> str:
+            \"\"\"Work slowly.\"\"\"
+            print("step 1")
+            time.sleep(30)
+            return "done"
+        """)
+        let tool: Agents.Tool = try #require(py.main.slow)
+        let log = ToolCallLog()
+        let call = Task { try await tool.text(arguments: GeneratedContent(json: "{}"), log: log) }
+
+        for _ in 0..<100 where log.cancel == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancel = try #require(log.cancel)
+        cancel()
+
+        #expect(try await call.value == "step 1\n\n" + Agents.Tool.cancelledText)
+    }
+
     @Test func stoppingASyncCallEndsItsSleep() async throws {
         await Interpreter.run("""
         import time
@@ -482,8 +530,8 @@ struct AgentsTests {
 
 extension Agents.Tool {
     // What the model reads back from a call, as text.
-    func text(arguments: GeneratedContent) async throws -> String {
-        try await respond(to: arguments).map {
+    func text(arguments: GeneratedContent, log: ToolCallLog = ToolCallLog()) async throws -> String {
+        try await respond(to: arguments, log: log).map {
             if case .text(let text) = $0 { text } else { "<image>" }
         }.joined()
     }

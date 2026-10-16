@@ -9,6 +9,7 @@ import SwiftPy
 import SwiftPyViews
 import FoundationModels
 import SwiftUI
+import Synchronization
 
 /// A function an ``agents.Agent`` can call, built by the ``agents.tool`` decorator.
 @Scriptable
@@ -138,7 +139,13 @@ extension Tool {
 
         // Shown while it runs, and filled in once it's done.
         display(log, title: title, input: await inputView(of: arguments, params: params))
-        defer { log.isRunning = false }
+        // What the call prints is its own, rather than the cell's: the model
+        // reads it, even from a call stopped partway.
+        let printed = PrintedText()
+        defer {
+            log.printed = printed.text
+            log.isRunning = false
+        }
 
         do {
             // A scope of its own, so stopping the call ends what it waits on,
@@ -149,21 +156,28 @@ extension Tool {
                     scope.cancel()
                 }
                 defer { log.cancel = nil }
-                return try await awaited(invoke(function, arguments: [params]))
+                return try await Interpreter.withOutput(to: { printed.append($0) }) {
+                    try await awaited(invoke(function, arguments: [params]))
+                }
             }
             let parts = try Self.parts(of: result)
-            log.output = await outputView(of: result, parts: parts)
-            return parts
+            // Nothing returned, so the printed text says it all.
+            let returnsNothing = result == nil || result?.typeName == "NoneType"
+            if !(returnsNothing && !printed.text.isEmpty) {
+                log.output = await outputView(of: result, parts: parts)
+            }
+            if printed.text.isEmpty { return parts }
+            return [.text(printed.text)] + (returnsNothing ? [] : parts)
         } catch where log.isCancelled {
             // The model hears why, and goes on from there.
             log.output = Self.outputBlock(Self.cancelledText)
-            return [.text(Self.cancelledText)]
+            return [.text(Self.joined(printed.text, Self.cancelledText))]
         } catch let error as PythonError where error.type != "KeyboardInterrupt" {
             // Handed back as the result, so the model can see what went wrong
             // and try again, rather than its whole response failing.
             let text = Self.failureText(of: error)
             log.output = Self.outputBlock(text, keepingEnd: true)
-            return [.text(text)]
+            return [.text(Self.joined(printed.text, text))]
         } catch {
             log.output = Self.outputBlock(Self.failureText(of: error), keepingEnd: true)
             throw error
@@ -199,6 +213,10 @@ extension Tool {
 
     static let cancelledText = "The user cancelled this call before it finished."
 
+    private static func joined(_ printed: String, _ text: String) -> String {
+        printed.isEmpty ? text : printed.trimmingCharacters(in: .newlines) + "\n\n" + text
+    }
+
     /// What `result` comes to: awaited, when it's a coroutine or a task.
     private func awaited(_ result: PyObject) async throws -> PyObject? {
         guard AsyncTask(result) != nil || PyRuntime.isCoroutine(result) else { return result }
@@ -213,21 +231,21 @@ extension Tool {
         return "\(fence)\n\(text.trimmingCharacters(in: .newlines))\n\(fence)"
     }
 
-    /// `text` in a code block, cut to `lineLimit` lines so a long result opens
-    /// quickly; the model still reads all of it. A traceback keeps its end.
+    /// `text` in a code block, cut to `lineLimit` lines until tapped, so a
+    /// long result opens quickly; the model still reads all of it. A traceback
+    /// keeps its end.
     static func outputBlock(_ text: String, keepingEnd: Bool = false) -> AnyView {
-        AnyView(MarkdownContent(model: Markdown(text: codeBlock(preview(text, keepingEnd: keepingEnd)))))
+        AnyView(ToolText(text: text, keepingEnd: keepingEnd))
     }
 
-    static let lineLimit = 20
+    static let lineLimit = 10
 
-    static func preview(_ text: String, keepingEnd: Bool = false) -> String {
+    /// The lines shown before a tap, and how many are left out.
+    static func preview(_ text: String, keepingEnd: Bool = false) -> (text: String, hidden: Int) {
         let lines = text.trimmingCharacters(in: .newlines).split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count > lineLimit else { return text }
-        let hidden = "… \(lines.count - lineLimit) more lines"
-        return keepingEnd
-            ? ([Substring(hidden)] + lines.suffix(lineLimit)).joined(separator: "\n")
-            : (lines.prefix(lineLimit) + [Substring(hidden)]).joined(separator: "\n")
+        guard lines.count > lineLimit else { return (text, 0) }
+        let kept = keepingEnd ? lines.suffix(lineLimit) : lines.prefix(lineLimit)
+        return (kept.joined(separator: "\n"), lines.count - lineLimit)
     }
 
     /// What a tool raised as `agents` formats it, or else the traceback
@@ -265,7 +283,8 @@ extension Tool {
         })
         guard let formatOutput else { return plain }
         do {
-            return try Self.formatted(await invoke(formatOutput, arguments: [result ?? .none]), by: "output")
+            let view = try Self.formatted(await invoke(formatOutput, arguments: [result ?? .none]), by: "output")
+            return AnyView(Collapsible { view })
         } catch {
             return Self.fallback(plain, failure: error)
         }
@@ -330,10 +349,22 @@ enum ToolResultPart {
 @Observable
 final class ToolCallLog {
     var isRunning = true
+    var printed = ""
     var output: AnyView?
     /// Set while the call runs.
     var cancel: (() -> Void)?
     var isCancelled = false
+}
+
+/// What a call prints, from whichever thread Python prints on.
+private final class PrintedText: Sendable {
+    private let buffer = Mutex("")
+
+    var text: String { buffer.withLock { $0 } }
+
+    func append(_ text: String) {
+        buffer.withLock { $0 += text }
+    }
 }
 
 private struct ToolCallView: View {
@@ -343,19 +374,120 @@ private struct ToolCallView: View {
 
     var body: some View {
         DisclosureLogContainerView(tint: .orange, isInProgress: log.isRunning, cancel: log.cancel) {
-            input
+            ToolCallSection("Input") {
+                Collapsible { input }
+            }
 
-            if let output = log.output {
-                output
-                    .environment(\.trimsLeadingHeadingPadding, true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+            if log.output != nil || !log.printed.isEmpty {
+                ToolCallSection("Output") {
+                    if !log.printed.isEmpty {
+                        ToolText(text: log.printed)
+                    }
+                    if let output = log.output {
+                        output
+                    }
+                }
+                .environment(\.trimsLeadingHeadingPadding, true)
+                .textSelection(.enabled)
             }
         } label: {
             Label(title, systemImage: "wrench.and.screwdriver")
                 .font(.body.bold())
                 .lineLimit(1)
         }
+    }
+}
+
+private struct ToolCallSection<Content: View>: View {
+    let title: LocalizedStringKey
+    @ViewBuilder let content: Content
+
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Text in a code block, its first `lineLimit` lines (or a traceback's last)
+/// until tapped.
+private struct ToolText: View {
+    private let full: Markdown
+    private let preview: Markdown
+    private let hidden: Int
+    private let keepingEnd: Bool
+    @State private var isExpanded = false
+
+    init(text: String, keepingEnd: Bool = false) {
+        let (preview, hidden) = Tool.preview(text, keepingEnd: keepingEnd)
+        self.full = Markdown(text: Tool.codeBlock(text))
+        self.preview = Markdown(text: Tool.codeBlock(preview))
+        self.hidden = hidden
+        self.keepingEnd = keepingEnd
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if keepingEnd { toggle }
+            MarkdownContent(model: isExpanded ? full : preview)
+            if !keepingEnd { toggle }
+        }
+    }
+
+    @ViewBuilder
+    private var toggle: some View {
+        if hidden > 0 {
+            ExpandButton(isExpanded: $isExpanded, collapsedTitle: "\(hidden) more lines")
+        }
+    }
+}
+
+/// A view cut to about `lineLimit` lines of code until tapped, for what isn't
+/// plain text: arguments, or what `input` and `output` formatted.
+private struct Collapsible<Content: View>: View {
+    @ViewBuilder let content: Content
+    @State private var height: CGFloat = 0
+    @State private var isExpanded = false
+    @ScaledMetric(relativeTo: .footnote) private var limit: CGFloat = 190
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { height = $0 }
+                .frame(maxHeight: isExpanded ? nil : limit, alignment: .top)
+                .clipped()
+
+            if height > limit + 1 {
+                ExpandButton(isExpanded: $isExpanded, collapsedTitle: "Show all")
+            }
+        }
+    }
+}
+
+private struct ExpandButton: View {
+    @Binding var isExpanded: Bool
+    let collapsedTitle: String
+
+    var body: some View {
+        Button {
+            withAnimation { isExpanded.toggle() }
+        } label: {
+            Label(isExpanded ? "Show less" : collapsedTitle, systemImage: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

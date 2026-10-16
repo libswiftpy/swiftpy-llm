@@ -10,7 +10,7 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
     let tint: Color
     /// Shows a progress indicator in place of the chevron, and doesn't expand.
     let isInProgress: Bool
-    /// Shown as a stop button beside the progress indicator, while in progress.
+    /// Shown as a stop button at the trailing edge, while in progress.
     let cancel: (() -> Void)?
     private let label: Label
     private let content: Content
@@ -38,41 +38,40 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
                 .frame(width: 4)
 
             VStack(alignment: .leading, spacing: 4) {
-                Button {
-                    // Not disabled, which would dim the label.
-                    guard !isInProgress else { return }
-                    withAnimation {
-                        isExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        label
-
-                        Spacer(minLength: 0)
-
-                        if isInProgress {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption.bold())
-                                .contentTransition(.symbolEffect(.replace))
-                                .accessibilityHidden(true)
+                HStack(spacing: 8) {
+                    Button {
+                        // Not disabled, which would dim the label.
+                        guard !isInProgress else { return }
+                        withAnimation {
+                            isExpanded.toggle()
                         }
+                    } label: {
+                        HStack(spacing: 8) {
+                            label
+
+                            Spacer(minLength: 0)
+
+                            if isInProgress {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.caption.bold())
+                                    .contentTransition(.symbolEffect(.replace))
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .overlay(alignment: .trailing) {
+                    .buttonStyle(.plain)
+
                     if isInProgress, let cancel {
-                        // Over the label's row, so a tap here stops rather than expands.
                         Button(action: cancel) {
                             Image(systemName: "stop.circle")
                                 .font(.body)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(tint)
-                        .padding(.trailing, 28)
                         .accessibilityLabel("Stop")
                     }
                 }
