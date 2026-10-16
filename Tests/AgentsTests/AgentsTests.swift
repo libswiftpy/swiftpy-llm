@@ -445,6 +445,19 @@ struct AgentsTests {
         #expect(ContinuousClock.now - started < .seconds(5))
     }
 
+    @Test func modelErrorsReadAsWhatToDo() throws {
+        let refusal = LanguageModelError.refusal(.init(explanation: "", debugDescription: "refused"))
+        let readable = try #require(Agent.readable(refusal) as? PythonError)
+        #expect(readable.value == "The model declined to answer. Try rephrasing the request.")
+        // What a Claude refusal comes to: its API ends one without an error.
+        let parsing = GeneratedContent.ParsingError(rawContent: "", debugDescription: "cut short")
+        let unreadable = try #require(Agent.readable(parsing) as? PythonError)
+        #expect(unreadable.value.contains("declines a request"))
+        // Python's own errors, a tool's for one, pass through.
+        let python = PythonError.ValueError("bad")
+        #expect(Agent.readable(python) as? PythonError == python)
+    }
+
     @Test func sendsTheInstructionsAndEveryEntry() async throws {
         let agent = Agent(instructions: "Be brief.")
         let seen = try await transcripts(of: agent, prompts: ["one", "two"])

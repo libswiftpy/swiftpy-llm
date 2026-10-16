@@ -135,14 +135,18 @@ public class Agent {
         } catch {
             guard let failed = sessionModel,
                   let fallback = model.provider.fallback(after: error, on: failed) else {
-                throw error
+                throw Self.readable(error)
             }
             // Continues from the transcript as it was before the failed
             // request, so the prompt is not repeated.
             response.content = ""
             response.model = nil
             session = start(on: fallback.model, named: fallback.name, reasons: false, history: transcript)
-            try await stream(prompt, schema: generationSchema, makeModel: makeModel, reasoning: nil, from: session, into: response)
+            do {
+                try await stream(prompt, schema: generationSchema, makeModel: makeModel, reasoning: nil, from: session, into: response)
+            } catch {
+                throw Self.readable(error)
+            }
         }
 
         response.isComplete = true
@@ -173,6 +177,39 @@ extension Agent {
         }
         let shaped = history?.apply(to: base, summarizer: model) ?? .init(erasing: base)
         return .init(erasing: shaped.model(model))
+    }
+
+    /// The framework's errors, said the way the person who asked can act on.
+    static func readable(_ error: any Error) -> any Error {
+        if error is GeneratedContent.ParsingError {
+            // Claude's API ends a refusal without an error, so a tool call it
+            // cut short is all that shows of it.
+            return PythonError.RuntimeError(
+                "The model's reply ended partway, so it couldn't be read. It does that when it declines a request, or runs out of room to answer. Try rephrasing the request."
+            )
+        }
+        guard let modelError = error as? LanguageModelError else { return error }
+        let message = switch modelError {
+        case .refusal:
+            "The model declined to answer. Try rephrasing the request."
+        case .guardrailViolation:
+            "The model's safety guardrails stopped the request or its reply."
+        case .contextSizeExceeded:
+            "The conversation is too long for the model."
+        case .rateLimited:
+            "The model is busy, or its rate limit was reached. Try again in a moment."
+        case .timeout:
+            "The model took too long to reply."
+        case .unsupportedCapability, .unsupportedGenerationGuide:
+            "The model doesn't support part of what was asked, such as the schema."
+        case .unsupportedTranscriptContent:
+            "The model can't take part of what was sent, such as an image."
+        case .unsupportedLanguageOrLocale:
+            "The model doesn't support this language."
+        @unknown default:
+            modelError.localizedDescription
+        }
+        return PythonError.RuntimeError(message)
     }
 
     /// The reasoning level as the session takes it, checked before anything
