@@ -264,8 +264,12 @@ extension Tool {
         try PyRuntime.call(function, arguments: arguments)
     }
 
-    /// The input as `input` formatted it, or each argument as it came.
-    private func inputView(of arguments: GeneratedContent, params: PyObject) async -> AnyView {
+    /// The input as `input` formatted it, or each argument as it came; nil
+    /// for a call without arguments.
+    private func inputView(of arguments: GeneratedContent, params: PyObject) async -> AnyView? {
+        if formatInput == nil, case let .structure(_, keys) = arguments.kind, keys.isEmpty {
+            return nil
+        }
         let plain = AnyView(ToolArguments(arguments: arguments))
         guard let formatInput else { return plain }
         do {
@@ -311,7 +315,7 @@ extension Tool {
         })
     }
 
-    private func display(_ log: ToolCallLog, title: String?, input: AnyView) {
+    private func display(_ log: ToolCallLog, title: String?, input: AnyView?) {
         let title = title?.replacing("\n", with: " ") ?? ""
         let view = ToolCallView(log: log, title: title.isEmpty ? name : title, input: input)
         Interpreter.interface.display(AnyView(view))
@@ -370,12 +374,14 @@ private final class PrintedText: Sendable {
 private struct ToolCallView: View {
     let log: ToolCallLog
     let title: String
-    let input: AnyView
+    let input: AnyView?
 
     var body: some View {
         DisclosureLogContainerView(tint: .orange, isInProgress: log.isRunning, cancel: log.cancel) {
-            ToolCallSection("Input") {
-                Collapsible { input }
+            if let input {
+                ToolCallSection("Input") {
+                    Collapsible { input }
+                }
             }
 
             if log.output != nil || !log.printed.isEmpty {
