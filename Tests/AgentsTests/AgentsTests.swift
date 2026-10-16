@@ -386,6 +386,65 @@ struct AgentsTests {
         if case .instructions = entry { true } else { false }
     }
 
+    @Test func stoppingACallTellsTheModel() async throws {
+        await Interpreter.run("""
+        import asyncio
+
+        @tool
+        async def wait(seconds: float) -> str:
+            \"\"\"Wait.\"\"\"
+            await asyncio.sleep(seconds)
+            return "waited"
+        """)
+        let tool: Agents.Tool = try #require(py.main.wait)
+        let log = ToolCallLog()
+        let call = Task {
+            try await tool.respond(to: GeneratedContent(json: #"{"seconds": 30}"#), log: log).map {
+                if case .text(let text) = $0 { text } else { "<image>" }
+            }.joined()
+        }
+
+        for _ in 0..<100 where log.cancel == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let cancel = try #require(log.cancel)
+        cancel()
+
+        #expect(try await call.value == Agents.Tool.cancelledText)
+        #expect(!log.isRunning)
+        #expect(log.cancel == nil)
+    }
+
+    @Test func stoppingASyncCallEndsItsSleep() async throws {
+        await Interpreter.run("""
+        import time
+
+        @tool
+        def nap(seconds: float) -> str:
+            \"\"\"Sleep.\"\"\"
+            time.sleep(seconds)
+            return "slept"
+        """)
+        let tool: Agents.Tool = try #require(py.main.nap)
+        let log = ToolCallLog()
+        let started = ContinuousClock.now
+        let call = Task {
+            try await tool.respond(to: GeneratedContent(json: #"{"seconds": 30}"#), log: log).map {
+                if case .text(let text) = $0 { text } else { "<image>" }
+            }.joined()
+        }
+
+        for _ in 0..<100 where log.cancel == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancel = try #require(log.cancel)
+        cancel()
+
+        #expect(try await call.value == Agents.Tool.cancelledText)
+        #expect(ContinuousClock.now - started < .seconds(5))
+    }
+
     @Test func sendsTheInstructionsAndEveryEntry() async throws {
         let agent = Agent(instructions: "Be brief.")
         let seen = try await transcripts(of: agent, prompts: ["one", "two"])

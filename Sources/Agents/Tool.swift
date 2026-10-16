@@ -132,20 +132,32 @@ extension Tool {
     }
 
     /// What the model gets back from a call: text, with images among it.
-    func respond(to arguments: GeneratedContent) async throws -> [ToolResultPart] {
+    func respond(to arguments: GeneratedContent, log: ToolCallLog = ToolCallLog()) async throws -> [ToolResultPart] {
         let (title, arguments) = Self.splitTitle(from: arguments)
         let params: PyObject = try makeParams(arguments.jsonString)
 
         // Shown while it runs, and filled in once it's done.
-        let log = ToolCallLog()
         display(log, title: title, input: await inputView(of: arguments, params: params))
         defer { log.isRunning = false }
 
         do {
-            let result = try await awaited(invoke(function, arguments: [params]))
+            // A scope of its own, so stopping the call ends what it waits on,
+            // `time.sleep` or an await, without stopping the rest of the run.
+            let result = try await Interpreter.withCancellationScope { scope in
+                log.cancel = {
+                    log.isCancelled = true
+                    scope.cancel()
+                }
+                defer { log.cancel = nil }
+                return try await awaited(invoke(function, arguments: [params]))
+            }
             let parts = try Self.parts(of: result)
             log.output = await outputView(of: result, parts: parts)
             return parts
+        } catch where log.isCancelled {
+            // The model hears why, and goes on from there.
+            log.output = Self.outputBlock(Self.cancelledText)
+            return [.text(Self.cancelledText)]
         } catch let error as PythonError where error.type != "KeyboardInterrupt" {
             // Handed back as the result, so the model can see what went wrong
             // and try again, rather than its whole response failing.
@@ -184,6 +196,8 @@ extension Tool {
         guard let type = py.module("views")?.Image.flatMap({ PyType($0) }) else { return false }
         return type.isInstance(object.reference)
     }
+
+    static let cancelledText = "The user cancelled this call before it finished."
 
     /// What `result` comes to: awaited, when it's a coroutine or a task.
     private func awaited(_ result: PyObject) async throws -> PyObject? {
@@ -314,9 +328,12 @@ enum ToolResultPart {
 /// A call's state, as its log shows it.
 @MainActor
 @Observable
-private final class ToolCallLog {
+final class ToolCallLog {
     var isRunning = true
     var output: AnyView?
+    /// Set while the call runs.
+    var cancel: (() -> Void)?
+    var isCancelled = false
 }
 
 private struct ToolCallView: View {
@@ -325,7 +342,7 @@ private struct ToolCallView: View {
     let input: AnyView
 
     var body: some View {
-        DisclosureLogContainerView(tint: .orange, isInProgress: log.isRunning) {
+        DisclosureLogContainerView(tint: .orange, isInProgress: log.isRunning, cancel: log.cancel) {
             input
 
             if let output = log.output {

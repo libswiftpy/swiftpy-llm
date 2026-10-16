@@ -10,6 +10,8 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
     let tint: Color
     /// Shows a progress indicator in place of the chevron, and doesn't expand.
     let isInProgress: Bool
+    /// Shown as a stop button beside the progress indicator, while in progress.
+    let cancel: (() -> Void)?
     private let label: Label
     private let content: Content
     @State private var isExpanded = false
@@ -18,11 +20,13 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
     init(
         tint: Color,
         isInProgress: Bool = false,
+        cancel: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content,
         @ViewBuilder label: () -> Label
     ) {
         self.tint = tint
         self.isInProgress = isInProgress
+        self.cancel = cancel
         self.content = content()
         self.label = label()
     }
@@ -59,6 +63,19 @@ struct DisclosureLogContainerView<Label: View, Content: View>: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .overlay(alignment: .trailing) {
+                    if isInProgress, let cancel {
+                        // Over the label's row, so a tap here stops rather than expands.
+                        Button(action: cancel) {
+                            Image(systemName: "stop.circle")
+                                .font(.body)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(tint)
+                        .padding(.trailing, 28)
+                        .accessibilityLabel("Stop")
+                    }
+                }
 
                 if isExpanded {
                     content
