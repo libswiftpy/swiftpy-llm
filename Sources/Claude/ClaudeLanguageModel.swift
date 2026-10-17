@@ -64,3 +64,16 @@ extension ClaudeModel {
         known.first { $0.id == id } ?? ClaudeModel(id: id, capabilities: sonnet5_5.capabilities)
     }
 }
+
+extension Agents.LanguageModel {
+    /// A Claude model, for Swift, such as `"claude-sonnet-5-5"`.
+    public static func claude(_ name: String, apiKey: Secret) -> Agents.LanguageModel {
+        Agents.LanguageModel(provider: ClaudeLanguageModel(name: name, apiKey: apiKey))
+    }
+
+    /// Whether Claude refused the API key a request was sent with; the
+    /// package reports a refused key as a missing one.
+    public static func claudeRejectsKey(_ error: any Error) -> Bool {
+        if case .missingCredential = error as? ClaudeError { true } else { false }
+    }
+}

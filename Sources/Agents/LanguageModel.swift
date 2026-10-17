@@ -63,3 +63,25 @@ extension LanguageModel: PythonConvertible {
         try provider.toPython()
     }
 }
+
+extension LanguageModel {
+    /// An Apple model, for Swift: ``SystemLanguageModel/privateCloudCompute()``
+    /// and the others.
+    public init(_ model: SystemLanguageModel) {
+        self.init(provider: model)
+    }
+
+    /// The model to start a session on, and the name it answers by.
+    public func resolve() throws(PythonError) -> (model: any FoundationModels.LanguageModel, name: String) {
+        let resolved = try provider.resolve()
+        return (resolved.model, resolved.name)
+    }
+
+    /// Where a request that failed on `model` continues, or `nil` to report the error.
+    public func fallback(
+        after error: any Error,
+        on model: any FoundationModels.LanguageModel
+    ) -> (model: any FoundationModels.LanguageModel, name: String)? {
+        provider.fallback(after: error, on: model)
+    }
+}
