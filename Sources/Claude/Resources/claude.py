@@ -14,7 +14,7 @@ answer = await agent.respond("Name a pasta dish")
 __all__ = ["ClaudeLanguageModel", "fable", "haiku", "model", "opus", "sonnet"]
 
 import keychain
-from _claude import ClaudeLanguageModel
+from _claude import KEY_PROMPT as _KEY_PROMPT, ClaudeLanguageModel
 
 ClaudeLanguageModel.__module__ = __name__
 
@@ -24,7 +24,7 @@ def model(name: str) -> ClaudeLanguageModel:
 
     name: The model's ID, such as "claude-opus-4-8".
     """
-    return ClaudeLanguageModel(name, keychain.secret("ANTHROPIC_API_KEY"))
+    return ClaudeLanguageModel(name, keychain.secret("ANTHROPIC_API_KEY", prompt=_KEY_PROMPT))
 
 
 def haiku() -> ClaudeLanguageModel:

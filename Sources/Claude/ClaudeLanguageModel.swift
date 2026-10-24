@@ -27,6 +27,11 @@ public final class ClaudeLanguageModel {
     }
 }
 
+extension ClaudeLanguageModel {
+    /// What a missing key is asked for with.
+    public nonisolated static let keyPrompt = "Paste an Anthropic API key from [platform.claude.com](https://platform.claude.com/settings/keys)."
+}
+
 extension ClaudeLanguageModel: CustomStringConvertible {
     public nonisolated var description: String {
         "<ClaudeLanguageModel name=\"\(name)\">"

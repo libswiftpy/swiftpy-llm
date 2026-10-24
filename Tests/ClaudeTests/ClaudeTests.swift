@@ -98,4 +98,19 @@ struct ClaudeTests {
         #expect(native.contains("class ClaudeLanguageModel(LanguageModel)"), "\(native)")
         #expect(native.contains("api_key: Secret"), "\(native)")
     }
+
+    @Test func asksForAMissingKeyWithWhereToGetOne() async {
+        storage.values["ANTHROPIC_API_KEY"] = nil
+        var asked: SecretRequest?
+        Interpreter.interface.requestSecret = { request in
+            asked = request
+            return "entered-key"
+        }
+        defer { Interpreter.interface.requestSecret = InterpreterInterface().requestSecret }
+
+        await Interpreter.run("_asked = claude.model('any')")
+
+        #expect(asked == SecretRequest(name: "ANTHROPIC_API_KEY", prompt: ClaudeLanguageModel.keyPrompt))
+        #expect(storage.values["ANTHROPIC_API_KEY"] == "entered-key")
+    }
 }

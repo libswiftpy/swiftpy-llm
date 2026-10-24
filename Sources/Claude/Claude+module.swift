@@ -10,6 +10,7 @@ public func initialize() {
 
     PyBind.module("_claude") { module in
         module.classes(ClaudeLanguageModel.self)
+        module.KEY_PROMPT = ClaudeLanguageModel.keyPrompt
     }
 
     PyBind.module("claude", in: .module)
