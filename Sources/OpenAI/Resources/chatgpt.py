@@ -14,10 +14,21 @@ answer = await agent.respond("Name a pasta dish")
 ```"""
 __all__ = ["ChatGPTLanguageModel", "astra", "luna", "model", "sol"]
 
+import _chatgpt
 import keychain
 from _chatgpt import KEY_PROMPT as _KEY_PROMPT, ChatGPTLanguageModel
 
 ChatGPTLanguageModel.__module__ = __name__
+
+# Bound only where signing in is offered.
+if hasattr(_chatgpt, "sign_in"):
+    from _chatgpt import account, sign_in, sign_out
+
+    __all__ += ["account", "sign_in", "sign_out"]
+
+
+def _signed_in() -> bool:
+    return hasattr(_chatgpt, "account") and _chatgpt.account() is not None
 
 
 def model(name: str) -> ChatGPTLanguageModel:
@@ -25,6 +36,8 @@ def model(name: str) -> ChatGPTLanguageModel:
 
     name: The model's ID, such as "gpt-6-sol".
     """
+    if _signed_in():
+        return ChatGPTLanguageModel(name)
     return ChatGPTLanguageModel(name, keychain.secret("OPENAI_API_KEY", prompt=_KEY_PROMPT))
 
 

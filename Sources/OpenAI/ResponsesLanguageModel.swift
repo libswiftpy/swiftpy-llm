@@ -15,16 +15,27 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
     public var name: String
     /// The API's base, `/responses` appended.
     public var url: URL
-    public var apiKey: String
+    public var credential: Credential
     // Tests inject one with a mock protocol.
     var urlSession: URLSession?
 
     public static let defaultURL = URL(string: "https://api.openai.com/v1")!
 
-    public init(name: String, apiKey: String, url: URL = defaultURL) {
+    /// What requests are paid with.
+    public enum Credential: Sendable, Hashable {
+        case apiKey(String)
+        /// The ChatGPT account's plan, signed in with ``ChatGPTAccount``.
+        case chatGPTPlan
+    }
+
+    public init(name: String, credential: Credential, url: URL = defaultURL) {
         self.name = name
-        self.apiKey = apiKey
+        self.credential = credential
         self.url = url
+    }
+
+    public init(name: String, apiKey: String, url: URL = defaultURL) {
+        self.init(name: name, credential: .apiKey(apiKey), url: url)
     }
 
     public var capabilities: LanguageModelCapabilities {
@@ -32,7 +43,7 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
     }
 
     public var executorConfiguration: Executor.Configuration {
-        Executor.Configuration(modelName: name, url: url, apiKey: apiKey, urlSession: urlSession)
+        Executor.Configuration(modelName: name, url: url, credential: credential, urlSession: urlSession)
     }
 
     /// An error the API reported.
@@ -65,6 +76,10 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
                     "Your OpenAI project reached its spend limit. Raise it in the project's settings at platform.openai.com."
                 case "organization_usage_limit_exceeded":
                     "Your OpenAI organization reached its usage limit. Ask OpenAI for a higher one to continue."
+                case "subscription_sharing_usage_limit_exceeded":
+                    "This app reached its limit on your ChatGPT plan. See ChatGPT Settings → Usage."
+                case "subscription_sharing_user_not_eligible":
+                    "ChatGPT plan use isn't available for this account or workspace."
                 default: message
                 }
             case .httpError(let statusCode, let message): "HTTP error \(statusCode): \(message)"
@@ -78,6 +93,7 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
         "credit_balance_exhausted", "insufficient_quota",
         "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
         "organization_usage_limit_exceeded",
+        "subscription_sharing_usage_limit_exceeded", "subscription_sharing_user_not_eligible",
     ]
 
     /// An error the API reported, in a response or in the stream, as the
@@ -87,7 +103,8 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
         type: String?,
         code: String?,
         message: String,
-        retryAfter: Date? = nil
+        retryAfter: Date? = nil,
+        usesPlan: Bool = false
     ) -> any Error {
         if let code, billingCodes.contains(code) {
             return RequestError.billing(code: code, message: message)
@@ -98,12 +115,17 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
         if code == "context_length_exceeded" {
             return LanguageModelError.contextSizeExceeded(.init(contextSize: 0, tokenCount: 0, debugDescription: message))
         }
+        // Signed in, it's the sign-in that failed, not a key to replace.
+        if usesPlan, status == 401 || code == "subscription_sharing_invalid_user" {
+            return ChatGPTSignInError.signInExpired
+        }
         if status == 401 || code == "invalid_api_key" {
             return RequestError.unauthorized(message)
         }
-        // Throttled or overloaded: the same request works later.
+        // Throttled, overloaded or briefly unavailable: the same request works later.
         if status == 429 || status == 503 || type == "rate_limit_error"
-            || ["rate_limit_exceeded", "slow_down", "server_is_overloaded"].contains(code) {
+            || ["rate_limit_exceeded", "slow_down", "server_is_overloaded",
+                "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable"].contains(code) {
             return LanguageModelError.rateLimited(.init(resetDate: retryAfter, debugDescription: message))
         }
         return APIError(message: message, type: type, code: code)
@@ -120,17 +142,17 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
         public struct Configuration: Hashable, Sendable {
             fileprivate let modelName: String
             fileprivate let url: URL
-            fileprivate let apiKey: String
+            fileprivate let credential: Credential
             fileprivate let urlSession: URLSession?
 
             public static func == (lhs: Configuration, rhs: Configuration) -> Bool {
-                lhs.modelName == rhs.modelName && lhs.url == rhs.url && lhs.apiKey == rhs.apiKey
+                lhs.modelName == rhs.modelName && lhs.url == rhs.url && lhs.credential == rhs.credential
             }
 
             public func hash(into hasher: inout Hasher) {
                 hasher.combine(modelName)
                 hasher.combine(url)
-                hasher.combine(apiKey)
+                hasher.combine(credential)
             }
         }
 
@@ -139,12 +161,20 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
             model: ResponsesLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
-            let body = try ResponsesRequest(request, model: configuration.modelName)
+            let token: String
+            let usesPlan: Bool
+            switch configuration.credential {
+            case .apiKey(let key):
+                (token, usesPlan) = (key, false)
+            case .chatGPTPlan:
+                (token, usesPlan) = (try await ChatGPTAccount.shared.accessToken(), true)
+            }
+            let body = try ResponsesRequest(request, model: configuration.modelName, usesPlan: usesPlan)
             var urlRequest = URLRequest(url: configuration.url.appendingPathComponent("responses"))
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-            urlRequest.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             urlRequest.httpBody = try JSONEncoder().encode(body)
 
             let session = configuration.urlSession ?? URLSession(configuration: .ephemeral)
@@ -154,10 +184,10 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
                 let data = try await bytes.reduce(into: Data()) { $0.append($1) }
                 let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
                     .flatMap(TimeInterval.init).map { Date(timeIntervalSinceNow: $0) }
-                throw Self.error(statusCode: http.statusCode, body: data, retryAfter: retryAfter)
+                throw Self.error(statusCode: http.statusCode, body: data, retryAfter: retryAfter, usesPlan: usesPlan)
             }
 
-            var translator = StreamTranslator()
+            var translator = StreamTranslator(usesPlan: usesPlan)
             for try await line in bytes.lines {
                 guard line.hasPrefix("data:") else { continue }
                 let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -174,16 +204,21 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
         }
 
         /// A failed request's error.
-        static func error(statusCode: Int, body: Data, retryAfter: Date? = nil) -> any Error {
+        static func error(statusCode: Int, body: Data, retryAfter: Date? = nil, usesPlan: Bool = false) -> any Error {
             guard let apiError = (try? JSONDecoder().decode(ErrorEnvelope.self, from: body))?.error else {
-                let message = String(decoding: body, as: UTF8.self)
+                // Plan use can be refused before the request starts, as `{"detail": ...}`.
+                let detail = (try? JSONDecoder().decode([String: String].self, from: body))?["detail"]
+                let message = detail ?? String(decoding: body, as: UTF8.self)
                 return statusCode == 401 || statusCode == 429 || statusCode == 503
-                    ? ResponsesLanguageModel.error(status: statusCode, type: nil, code: nil, message: message, retryAfter: retryAfter)
+                    ? ResponsesLanguageModel.error(
+                        status: statusCode, type: nil, code: nil, message: message,
+                        retryAfter: retryAfter, usesPlan: usesPlan
+                    )
                     : RequestError.httpError(statusCode: statusCode, message: message)
             }
             return ResponsesLanguageModel.error(
                 status: statusCode, type: apiError.type, code: apiError.code,
-                message: apiError.message, retryAfter: retryAfter
+                message: apiError.message, retryAfter: retryAfter, usesPlan: usesPlan
             )
         }
     }
@@ -199,7 +234,7 @@ struct ResponsesRequest: Encodable {
     var model: String
     var instructions: String?
     var input: [InputItem]
-    var tools: [FunctionTool]?
+    var tools: [Tool]?
     var toolChoice: String?
     var text: TextOptions?
     var reasoning: Reasoning
@@ -212,6 +247,30 @@ struct ResponsesRequest: Encodable {
         case model, instructions, input, tools, text, reasoning, stream, store, include
         case toolChoice = "tool_choice"
         case maxOutputTokens = "max_output_tokens"
+    }
+
+    /// What a request signed in with ChatGPT groups its functions under, as
+    /// plan use takes no top-level ones.
+    static let toolNamespace = "app"
+
+    enum Tool: Encodable {
+        case function(FunctionTool)
+        case namespace(name: String, description: String, tools: [FunctionTool])
+
+        enum Keys: String, CodingKey { case type, name, description, tools }
+
+        func encode(to encoder: any Encoder) throws {
+            switch self {
+            case .function(let function):
+                try function.encode(to: encoder)
+            case .namespace(let name, let description, let tools):
+                var container = encoder.container(keyedBy: Keys.self)
+                try container.encode("namespace", forKey: .type)
+                try container.encode(name, forKey: .name)
+                try container.encode(description, forKey: .description)
+                try container.encode(tools, forKey: .tools)
+            }
+        }
     }
 
     struct FunctionTool: Encodable {
@@ -239,14 +298,22 @@ struct ResponsesRequest: Encodable {
         var summary = "auto"
     }
 
-    init(_ request: LanguageModelExecutorGenerationRequest, model: String) throws {
+    init(_ request: LanguageModelExecutorGenerationRequest, model: String, usesPlan: Bool = false) throws {
         self.model = model
         var instructions: [String] = []
-        input = try Self.items(from: request.transcript, instructions: &instructions)
+        input = try Self.items(
+            from: request.transcript, instructions: &instructions,
+            namespace: usesPlan ? Self.toolNamespace : nil
+        )
         self.instructions = instructions.isEmpty ? nil : instructions.joined(separator: "\n\n")
         let definitions = request.enabledToolDefinitions
-        tools = definitions.isEmpty ? nil : definitions.map {
+        let functions = definitions.map {
             FunctionTool(name: $0.name, description: $0.description, parameters: $0.parameters)
+        }
+        if !functions.isEmpty {
+            tools = usesPlan
+                ? [.namespace(name: Self.toolNamespace, description: "The app's tools.", tools: functions)]
+                : functions.map(Tool.function)
         }
         if !definitions.isEmpty {
             toolChoice = switch request.generationOptions.toolCallingMode?.kind {
@@ -257,7 +324,8 @@ struct ResponsesRequest: Encodable {
         }
         text = request.schema.map { TextOptions(format: .init(name: $0.name, schema: $0)) }
         reasoning = Reasoning(effort: Self.effort(request.contextOptions.reasoningLevel))
-        maxOutputTokens = request.generationOptions.maximumResponseTokens
+        // Plan use takes no output limit.
+        maxOutputTokens = usesPlan ? nil : request.generationOptions.maximumResponseTokens
     }
 
     /// The level as `reasoning.effort`; none leaves the model's default.
@@ -273,7 +341,11 @@ struct ResponsesRequest: Encodable {
         }
     }
 
-    static func items(from transcript: Transcript, instructions: inout [String]) throws -> [InputItem] {
+    static func items(
+        from transcript: Transcript,
+        instructions: inout [String],
+        namespace: String? = nil
+    ) throws -> [InputItem] {
         var items: [InputItem] = []
         for entry in transcript {
             switch entry {
@@ -285,7 +357,10 @@ struct ResponsesRequest: Encodable {
                 items.append(.message(role: "assistant", content: [.outputText(text(of: response.segments))]))
             case .toolCalls(let calls):
                 for call in calls {
-                    items.append(.functionCall(callID: call.id, name: call.toolName, arguments: call.arguments.jsonString))
+                    items.append(.functionCall(
+                        callID: call.id, name: call.toolName,
+                        arguments: call.arguments.jsonString, namespace: namespace
+                    ))
                 }
             case .toolOutput(let output):
                 items.append(.functionCallOutput(callID: output.id, output: text(of: output.segments)))
@@ -342,7 +417,7 @@ struct StoredReasoning: Codable {
 
 enum InputItem: Encodable {
     case message(role: String, content: [Content])
-    case functionCall(callID: String, name: String, arguments: String)
+    case functionCall(callID: String, name: String, arguments: String, namespace: String?)
     case functionCallOutput(callID: String, output: String)
     case reasoning(id: String, encryptedContent: String?, summary: String)
 
@@ -368,7 +443,7 @@ enum InputItem: Encodable {
     }
 
     enum Keys: String, CodingKey {
-        case type, role, content, name, arguments, output, id, summary, text
+        case type, role, content, name, arguments, output, id, summary, text, namespace
         case callID = "call_id"
         case encryptedContent = "encrypted_content"
         case imageURL = "image_url"
@@ -381,11 +456,12 @@ enum InputItem: Encodable {
             try container.encode("message", forKey: .type)
             try container.encode(role, forKey: .role)
             try container.encode(content, forKey: .content)
-        case .functionCall(let callID, let name, let arguments):
+        case .functionCall(let callID, let name, let arguments, let namespace):
             try container.encode("function_call", forKey: .type)
             try container.encode(callID, forKey: .callID)
             try container.encode(name, forKey: .name)
             try container.encode(arguments, forKey: .arguments)
+            try container.encodeIfPresent(namespace, forKey: .namespace)
         case .functionCallOutput(let callID, let output):
             try container.encode("function_call_output", forKey: .type)
             try container.encode(callID, forKey: .callID)
@@ -481,6 +557,8 @@ struct StreamEvent: Decodable {
 /// Events into channel sends, one entry per kind for the response and tool
 /// calls, and one per reasoning item, which the API replays by its ID.
 struct StreamTranslator {
+    /// Whether the request used the ChatGPT plan, which changes what a 401 means.
+    let usesPlan: Bool
     private let responseEntryID = UUID().uuidString
     private let toolCallsEntryID = UUID().uuidString
     /// A function call's item ID to its call ID and name.
@@ -488,6 +566,10 @@ struct StreamTranslator {
     /// Calls whose arguments came in deltas, so `done` doesn't repeat them.
     private var streamedArguments: Set<String> = []
     private var summaryIndex: [String: Int] = [:]
+
+    init(usesPlan: Bool = false) {
+        self.usesPlan = usesPlan
+    }
 
     mutating func translate(_ event: StreamEvent, into channel: LanguageModelExecutorGenerationChannel) async throws {
         switch event.type {
@@ -542,7 +624,8 @@ struct StreamTranslator {
         case "response.failed":
             let error = event.response?.error
             throw ResponsesLanguageModel.error(
-                status: nil, type: error?.type, code: error?.code, message: error?.message ?? event.raw
+                status: nil, type: error?.type, code: error?.code, message: error?.message ?? event.raw,
+                usesPlan: usesPlan
             )
 
         case "error":
@@ -550,7 +633,8 @@ struct StreamTranslator {
                 status: nil,
                 type: event.error?.type,
                 code: event.code ?? event.error?.code,
-                message: event.message ?? event.error?.message ?? event.raw
+                message: event.message ?? event.error?.message ?? event.raw,
+                usesPlan: usesPlan
             )
 
         default:
