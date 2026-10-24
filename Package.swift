@@ -14,6 +14,10 @@ let package = Package(
             name: "Claude",
             targets: ["Claude"],
         ),
+        .library(
+            name: "OpenAI",
+            targets: ["OpenAI"],
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.30.0"),
@@ -51,6 +55,19 @@ let package = Package(
                 .enableExperimentalFeature("AnyAppleOSAvailability"),
             ]
         ),
+        .target(
+            name: "OpenAI",
+            dependencies: [
+                "Agents",
+                "SwiftPy",
+            ],
+            resources: [
+                .process("Resources")
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("AnyAppleOSAvailability"),
+            ]
+        ),
         .testTarget(
             name: "AgentsTests",
             dependencies: ["Agents"]
@@ -58,6 +75,10 @@ let package = Package(
         .testTarget(
             name: "ClaudeTests",
             dependencies: ["Claude"]
+        ),
+        .testTarget(
+            name: "OpenAITests",
+            dependencies: ["OpenAI"]
         ),
     ]
 )
