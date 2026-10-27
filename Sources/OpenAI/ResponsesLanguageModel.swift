@@ -175,7 +175,11 @@ public struct ResponsesLanguageModel: Sendable, LanguageModel {
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            urlRequest.httpBody = try JSONEncoder().encode(body)
+            // Sorted, as tool schemas encode their keys in a new order each time,
+            // which changes the prompt's prefix and misses the cache.
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            urlRequest.httpBody = try encoder.encode(body)
 
             let session = configuration.urlSession ?? URLSession(configuration: .ephemeral)
             let (bytes, response) = try await session.bytes(for: urlRequest)
@@ -239,6 +243,8 @@ struct ResponsesRequest: Encodable {
     var text: TextOptions?
     var reasoning: Reasoning
     var maxOutputTokens: Int?
+    // Keeps a conversation's turns on one cache; without it they rarely hit.
+    var promptCacheKey: String?
     var stream = true
     var store = false
     var include = ["reasoning.encrypted_content"]
@@ -247,6 +253,7 @@ struct ResponsesRequest: Encodable {
         case model, instructions, input, tools, text, reasoning, stream, store, include
         case toolChoice = "tool_choice"
         case maxOutputTokens = "max_output_tokens"
+        case promptCacheKey = "prompt_cache_key"
     }
 
     /// What a request signed in with ChatGPT groups its functions under, as
@@ -306,6 +313,7 @@ struct ResponsesRequest: Encodable {
             namespace: usesPlan ? Self.toolNamespace : nil
         )
         self.instructions = instructions.isEmpty ? nil : instructions.joined(separator: "\n\n")
+        promptCacheKey = request.transcript.first?.id
         let definitions = request.enabledToolDefinitions
         let functions = definitions.map {
             FunctionTool(name: $0.name, description: $0.description, parameters: $0.parameters)
@@ -359,7 +367,7 @@ struct ResponsesRequest: Encodable {
                 for call in calls {
                     items.append(.functionCall(
                         callID: call.id, name: call.toolName,
-                        arguments: call.arguments.jsonString, namespace: namespace
+                        arguments: stableJSON(call.arguments), namespace: namespace
                     ))
                 }
             case .toolOutput(let output):
@@ -384,7 +392,7 @@ struct ResponsesRequest: Encodable {
         case .text(let text):
             return .inputText(text.content)
         case .structure(let structure):
-            return .inputText(structure.content.jsonString)
+            return .inputText(stableJSON(structure.content))
         case .attachment(let attachment):
             guard case .image(let image) = attachment.content else {
                 throw LanguageModelError.unsupportedTranscriptContent(
@@ -399,11 +407,23 @@ struct ResponsesRequest: Encodable {
         }
     }
 
+    /// `jsonString` orders keys anew each time; sorted, a replayed turn keeps
+    /// the prompt's prefix, and so its cache.
+    static func stableJSON(_ content: GeneratedContent) -> String {
+        let json = content.jsonString
+        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8), options: .fragmentsAllowed),
+              let data = try? JSONSerialization.data(
+                withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
+              )
+        else { return json }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     static func text(of segments: [Transcript.Segment]) -> String {
         segments.compactMap { segment in
             switch segment {
             case .text(let text): text.content
-            case .structure(let structure): structure.content.jsonString
+            case .structure(let structure): stableJSON(structure.content)
             default: nil
             }
         }.joined(separator: "\n")
