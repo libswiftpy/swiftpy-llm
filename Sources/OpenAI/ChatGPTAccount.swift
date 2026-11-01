@@ -23,9 +23,6 @@ public final class ChatGPTAccount {
     /// `pyprompt://chatgpt-signed-in`, which the app's own URL handling skips.
     public nonisolated static let callbackHost = "chatgpt-signed-in"
 
-    /// Whether signing in is offered; without it, it's as if signed out.
-    public internal(set) var isEnabled = false
-
     var store: any ChatGPTCredentialStore = KeychainCredentialStore()
     var defaults = UserDefaults.standard
     var urlSession = URLSession(configuration: .ephemeral)
@@ -61,7 +58,7 @@ public final class ChatGPTAccount {
     }
 
     public var isSignedIn: Bool {
-        guard isEnabled, let record, record.accessToken != nil else { return false }
+        guard let record, record.accessToken != nil else { return false }
         return record.scopes.contains(ChatGPTAuthorization.planScope)
     }
 
@@ -180,7 +177,7 @@ public final class ChatGPTAccount {
     /// A current access token, renewed near its expiry; one renewal at a
     /// time, as each replaces the refresh token.
     func accessToken() async throws -> String {
-        guard isEnabled, let current = record, let token = current.accessToken else {
+        guard let current = record, let token = current.accessToken else {
             throw ChatGPTSignInError.notSignedIn
         }
         if let expiresAt = current.expiresAt, expiresAt.timeIntervalSinceNow > Self.refreshMargin {
@@ -288,7 +285,9 @@ final class WebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding
     }()
 
     static func run(_ url: URL, listener: LoopbackListener) async throws -> [String: String] {
-        let presenter = WebSignIn(anchor: keyWindow())
+        // No window to show the sheet over, as when a shortcut runs it.
+        guard let anchor = keyWindow() else { throw ChatGPTSignInError.cancelled }
+        let presenter = WebSignIn(anchor: anchor)
         // Called on AuthenticationServices' own queue, not main.
         let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) { @Sendable _, error in
             // Closed before the callback arrived.
@@ -316,20 +315,20 @@ final class WebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding
     }
 
     /// The window the sheet shows over, picked on main before it starts.
-    private nonisolated(unsafe) let anchor: ASPresentationAnchor
+    private let anchor: ASPresentationAnchor
 
     private init(anchor: ASPresentationAnchor) {
         self.anchor = anchor
     }
 
-    private static func keyWindow() -> ASPresentationAnchor {
+    private static func keyWindow() -> ASPresentationAnchor? {
         #if canImport(UIKit)
         let windows = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
-        return windows.first(where: \.isKeyWindow) ?? windows.first ?? ASPresentationAnchor()
+        return windows.first(where: \.isKeyWindow) ?? windows.first
         #else
-        return NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        return NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first
         #endif
     }
 
