@@ -124,7 +124,6 @@ extension OpenAISuite {
             configuration.protocolClasses = [MockAuth.self]
             account.urlSession = URLSession(configuration: configuration)
             account.store = store
-            account.isEnabled = true
             account.appName = "PyPrompt"
             account.defaults = UserDefaults(suiteName: "ChatGPTSignInTests")!
             account.defaults.removeObject(forKey: "ChatGPTHostID")
@@ -265,16 +264,12 @@ extension OpenAISuite {
             }
         }
 
-        @Test func offOnlyWhenNotOffered() {
+        @Test func signedInOnlyWithPlanUse() {
             account.record = .init(
                 clientID: "oaiapp_1", accessToken: "at", refreshToken: "rt",
                 expiresAt: Date(timeIntervalSinceNow: 600), scopes: [ChatGPTAuthorization.planScope]
             )
             #expect(account.isSignedIn)
-            account.isEnabled = false
-            #expect(!account.isSignedIn)
-            #expect(account.email == nil)
-            account.isEnabled = true
             // Without plan use, there's nothing to run on.
             account.record?.scopes = ["openid"]
             #expect(!account.isSignedIn)

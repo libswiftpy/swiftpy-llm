@@ -20,15 +20,19 @@ from _chatgpt import KEY_PROMPT as _KEY_PROMPT, ChatGPTLanguageModel
 
 ChatGPTLanguageModel.__module__ = __name__
 
+from _chatgpt import account, sign_out
+
+__all__ += ["account", "sign_out"]
+
 # Bound only where signing in is offered.
 if hasattr(_chatgpt, "sign_in"):
-    from _chatgpt import account, sign_in, sign_out
+    from _chatgpt import sign_in
 
-    __all__ += ["account", "sign_in", "sign_out"]
+    __all__ += ["sign_in"]
 
 
 def _signed_in() -> bool:
-    return hasattr(_chatgpt, "account") and _chatgpt.account() is not None
+    return account() is not None
 
 
 def model(name: str) -> ChatGPTLanguageModel:

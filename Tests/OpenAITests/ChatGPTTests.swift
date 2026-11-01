@@ -72,6 +72,8 @@ extension OpenAISuite {
         @Test func signingInIsntOfferedWithoutTheFlag() {
             #expect(evaluate("str(hasattr(chatgpt, 'sign_in'))") == "False")
             #expect(evaluate("str('sign_in' in chatgpt.__all__)") == "False")
+            // An account signed in before still can sign out.
+            #expect(evaluate("str(callable(chatgpt.sign_out) and chatgpt.account() is None)") == "True")
         }
 
         @Test func resolvesWithTheStoredKey() throws {
