@@ -8,7 +8,7 @@ model call it.
 from agents import Agent, tool
 
 @tool
-async def temperature(city: str) -> str:
+def temperature(city: str) -> str:
     '''Look up the current temperature in a city.'''
     return "22 °C"
 
@@ -19,13 +19,37 @@ print(answer)
 
 Use ``modeling.model`` to ask for a structured answer.
 
-On iOS 27 and later an agent runs on Private Cloud Compute when it is available
-and falls back to the on-device model otherwise."""
-__all__ = ["Agent", "tool"]
+An agent runs on Private Cloud Compute when it is available and falls back to
+the on-device model otherwise. Pass an ``agents.SystemLanguageModel`` as `model`
+to pick one, ``agents.Skill`` objects as `skills` for guidance the model takes up
+only when needed, and an ``agents.History`` as `history` to keep long
+conversations within the model's context.
+
+```python
+from agents import Agent, History, SystemLanguageModel
+
+agent = Agent(model=SystemLanguageModel.on_device(), history=History(rolling_window=10))
+```"""
+__all__ = ["Agent", "History", "LanguageModel", "Skill", "SystemLanguageModel", "SystemModelLocation", "tool"]
 
 import inspect
-from typing import Any, Callable
-from agents.native import Agent, Tool
+from enum import Enum
+from typing import Any, Callable, overload
+
+
+class SystemModelLocation(Enum):
+    """Where a ``agents.SystemLanguageModel`` runs."""
+    AUTOMATIC = "automatic"
+    ON_DEVICE = "on-device"
+    PRIVATE_CLOUD_COMPUTE = "private-cloud-compute"
+
+
+from _agents import Agent, History, LanguageModel, Skill, SystemLanguageModel, Tool
+
+# Report the public module, not the private one they live in.
+for _type in (Agent, History, LanguageModel, Skill, SystemLanguageModel):
+    _type.__module__ = __name__
+del _type
 
 @classmethod
 def _args_from_json(cls, json_str):
@@ -54,15 +78,39 @@ def _resolve(ann):
 def _type_name(ann):
     return ann.__name__ if hasattr(ann, '__name__') else str(ann)
 
-def tool(fn: Callable[..., Any]) -> Tool:
+# Bare, it makes the tool; with only keywords, a decorator that does.
+@overload
+def tool(
+    fn: Callable[..., Any],
+    *,
+    input: Callable[..., Any] | None = None,
+    output: Callable[[Any], Any] | None = None,
+) -> Tool: ...
+@overload
+def tool(
+    fn: None = None,
+    *,
+    input: Callable[..., Any] | None = None,
+    output: Callable[[Any], Any] | None = None,
+) -> Callable[[Callable[..., Any]], Tool]: ...
+def tool(
+    fn: Callable[..., Any] | None = None,
+    *,
+    input: Callable[..., Any] | None = None,
+    output: Callable[[Any], Any] | None = None,
+) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Turn a function into a Tool an Agent can call.
 
     fn: The function to expose. Its name becomes the tool name and its docstring
         is what the model reads to decide when to call it, so write one.
+    input: Formats a call's input for its log, as ``agents.Tool.input`` does.
+    output: Formats a call's result for its log, as ``agents.Tool.output`` does.
 
     Annotate every parameter: the annotations become the schema the model fills
     in. The function may be a coroutine, and whatever it returns is converted to
-    a string for the model.
+    a string for the model. A ``views.Image``, or a list of text and images, reaches
+    the model as images, for models that can see them. What it prints goes to the
+    model too, ahead of the result, and reaches it even when the user stops the call.
 
     ```python
     from agents import Agent, tool
@@ -83,7 +131,30 @@ def tool(fn: Callable[..., Any]) -> Tool:
 
     Calling the decorated name runs the original function, so a tool stays
     testable on its own.
+
+    `input` takes the same arguments as the function and returns what an
+    expanded call shows of them: a view, or a string shown as Markdown.
+    `output` does the same for what the function returned, which otherwise
+    shows in a plain code block.
+
+    ````python
+    @tool(input=lambda code: f"```python\\n{code}\\n```")
+    def run(code: str) -> str:
+        '''Runs Python code.'''
+        ...
+    ````
     """
+    if fn is None:
+        return lambda fn: tool(fn, input=input, output=output)
+
+    made = _make_tool(fn)
+    if input is not None:
+        made.input(input)
+    if output is not None:
+        made.output(output)
+    return made
+
+def _make_tool(fn):
     sig = inspect.signature(fn)
     params = list(sig.parameters.items())
 
@@ -91,7 +162,7 @@ def tool(fn: Callable[..., Any]) -> Tool:
     if len(params) == 1:
         ann = _resolve(params[0][1].annotation)
         if hasattr(ann, '_schema'):
-            return Tool(ann, fn, fn)
+            return Tool(ann, lambda args, fn=fn: _call(fn, args), fn)
 
     # Multi-param pattern: synthesize args class
     field_names = [name for name, _ in params]
@@ -107,7 +178,37 @@ def tool(fn: Callable[..., Any]) -> Tool:
     Args._tool_name = fn.__name__
     Args._tool_description = fn.__doc__ or ""
 
-    def wrapped(args):
-        return fn(*[args._fields[f] for f in field_names])
+    # `fn` is the tool's own, or what `input` formats the arguments with.
+    def wrapped(args, fn=fn):
+        return _call(fn, *[args._fields[f] for f in field_names])
 
     return Tool(Args, wrapped, fn)
+
+class _ToolFailure(Exception):
+    """What a tool raised, as the traceback the model reads."""
+
+def _failure(error):
+    import traceback
+    # Starts past this module's frame, and past the tool's own when it ran
+    # code with exec or eval, or failed to compile it: that code is the
+    # model's, the exec line isn't.
+    frames = error.__traceback__.tb_next
+    below = frames.tb_next if frames is not None else None
+    if below is not None and below.tb_frame.f_code.co_name == "<module>":
+        frames = below
+    elif below is None and isinstance(error, SyntaxError):
+        frames = None
+    return _ToolFailure("".join(traceback.format_exception(type(error), error, frames)))
+
+def _call(fn, *args):
+    try:
+        result = fn(*args)
+    except Exception as error:
+        raise _failure(error) from None
+    return _awaited(result) if inspect.iscoroutine(result) else result
+
+async def _awaited(coroutine):
+    try:
+        return await coroutine
+    except Exception as error:
+        raise _failure(error) from None

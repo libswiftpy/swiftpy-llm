@@ -10,10 +10,21 @@ let package = Package(
             name: "Agents",
             targets: ["Agents"],
         ),
+        .library(
+            name: "Claude",
+            targets: ["Claude"],
+        ),
+        .library(
+            name: "OpenAI",
+            targets: ["OpenAI"],
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/felfoldy/SwiftPy", from: "0.30.0"),
         .package(url: "https://github.com/libswiftpy/swiftpy-views", branch: "main"),
+        // Only beta tags so far, which `from:` doesn't resolve.
+        .package(url: "https://github.com/apple/foundation-models-utilities", exact: "1.1.0-beta1"),
+        .package(url: "https://github.com/anthropics/ClaudeForFoundationModels", from: "0.2.3"),
     ],
     targets: [
         .target(
@@ -21,6 +32,7 @@ let package = Package(
             dependencies: [
                 "SwiftPy",
                 .product(name: "SwiftPyViews", package: "swiftpy-views"),
+                .product(name: "FoundationModelsUtilities", package: "foundation-models-utilities"),
             ],
             resources: [
                 .process("Resources")
@@ -28,6 +40,45 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("AnyAppleOSAvailability"),
             ]
+        ),
+        .target(
+            name: "Claude",
+            dependencies: [
+                "Agents",
+                "SwiftPy",
+                .product(name: "ClaudeForFoundationModels", package: "ClaudeForFoundationModels"),
+            ],
+            resources: [
+                .process("Resources")
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("AnyAppleOSAvailability"),
+            ]
+        ),
+        .target(
+            name: "OpenAI",
+            dependencies: [
+                "Agents",
+                "SwiftPy",
+            ],
+            resources: [
+                .process("Resources")
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("AnyAppleOSAvailability"),
+            ]
+        ),
+        .testTarget(
+            name: "AgentsTests",
+            dependencies: ["Agents"]
+        ),
+        .testTarget(
+            name: "ClaudeTests",
+            dependencies: ["Claude"]
+        ),
+        .testTarget(
+            name: "OpenAITests",
+            dependencies: ["OpenAI"]
         ),
     ]
 )

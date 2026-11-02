@@ -2,6 +2,8 @@ import SwiftPy
 import SwiftPyViews
 import SwiftUI
 import FoundationModels
+import FoundationModelsUtilities
+import ImageIO
 
 /// A session that holds a conversation with a language model.
 @Scriptable
@@ -9,33 +11,41 @@ import FoundationModels
 public class Agent {
     private let instructions: String?
     private let tools: [Tool]
+    private let skills: [Skill]
+    private let history: History?
+    // Required by `Skills`, though prompt skills are never recorded in it.
+    private let activations = SkillActivations()
     private var session: FoundationModels.LanguageModelSession?
-    private var usesPrivateCloudCompute = false
-    // Once a request could not reach Private Cloud Compute, agents started
-    // soon after go on-device instead of each failing the same way first; a
-    // later one tries again, so a dropped connection is not the whole day.
-    private static var privateCloudComputeFailedAt: Date?
-    private static let privateCloudComputeRetryInterval: TimeInterval = 5 * 60
+    private var sessionModel: (any FoundationModels.LanguageModel)?
+    private var reasons = false
+    private var answeredBy: String?
 
-    private static var privateCloudComputeFailedRecently: Bool {
-        guard let failedAt = privateCloudComputeFailedAt else { return false }
-        return Date().timeIntervalSince(failedAt) < privateCloudComputeRetryInterval
-    }
+    /// The model the agent runs on.
+    public let model: LanguageModel
 
-    private var modelName: String?
+    /// The model that answered: `"Private Cloud Compute"`, `"On-device"`, or a
+    /// Claude model's ID, or `None` before the first response.
+    public var modelName: String? { answeredBy }
 
-    /// The model the session runs on: `"Private Cloud Compute"` or
-    /// `"On-device"`, or `None` before the first response.
-    public var model: String? { modelName }
-
-    /// Starts a session with a language model. On iOS 27 and later this is
-    /// Private Cloud Compute when it is available, otherwise the on-device model.
+    /// Starts a session with a language model.
     ///
     /// instructions: Standing guidance the model follows for every prompt in the session, such as its role and the style to answer in. Defaults to None.
     /// tools: Functions the model may call, each one built by the ``agents.tool`` decorator. Defaults to None.
-    public init(instructions: String? = nil, tools: [Tool]? = nil) {
+    /// model: The model to run on, such as ``claude.sonnet()``. Defaults to None, a ``agents.SystemLanguageModel``: Private Cloud Compute when it is available, the on-device model otherwise.
+    /// skills: Guidance the model takes up only when a request needs it, each a ``agents.Skill``. Defaults to None.
+    /// history: How a long conversation is kept within the model's context, a ``agents.History``. Defaults to None, keeping all of it.
+    public init(
+        instructions: String? = nil,
+        tools: [Tool]? = nil,
+        model: LanguageModel? = nil,
+        skills: [Skill]? = nil,
+        history: History? = nil
+    ) {
         self.instructions = instructions
         self.tools = tools ?? []
+        self.model = model ?? LanguageModel(provider: SystemLanguageModel())
+        self.skills = skills ?? []
+        self.history = history
     }
 
     // Resolved on the first response rather than in init, the async place a
@@ -44,98 +54,30 @@ public class Agent {
         if let session {
             return session
         }
+        let resolved = try model.provider.resolve()
+        return start(on: resolved.model, named: resolved.name, reasons: resolved.reasons, history: [])
+    }
 
-        if !Self.privateCloudComputeFailedRecently {
-            let cloud = PrivateCloudComputeLanguageModel()
-            if cloud.isAvailable {
-                let session = FoundationModels.LanguageModelSession(
-                    model: cloud,
-                    tools: tools,
-                    instructions: instructions
-                )
-                self.session = session
-                usesPrivateCloudCompute = true
-                modelName = "Private Cloud Compute"
-                return session
-            }
-        }
-
-        let onDevice = SystemLanguageModel.default
-        if case let .unavailable(reason) = onDevice.availability {
-            throw .RuntimeError(Self.message(for: reason))
-        }
-
-        let session = FoundationModels.LanguageModelSession(
-            model: onDevice,
-            tools: tools,
-            instructions: instructions
-        )
+    private func start(
+        on model: any FoundationModels.LanguageModel,
+        named name: String,
+        reasons: Bool,
+        history: [Transcript.Entry]
+    ) -> FoundationModels.LanguageModelSession {
+        let session = FoundationModels.LanguageModelSession(profile: profile(for: model), history: history)
         self.session = session
-        usesPrivateCloudCompute = false
-        modelName = "On-device"
+        sessionModel = model
+        self.reasons = reasons
+        answeredBy = name
         return session
-    }
-
-    private static func message(for reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
-        switch reason {
-        case .appleIntelligenceNotEnabled:
-            "Apple Intelligence is not enabled."
-        case .deviceNotEligible:
-            "This device does not support Apple Intelligence."
-        case .modelNotReady:
-            "The model is not ready yet."
-        @unknown default:
-            "The model is unavailable."
-        }
-    }
-
-    /// Continues the conversation on the on-device model, from the transcript
-    /// as it was before the failed request so the prompt is not repeated.
-    private func fallBackToDevice(transcript: Transcript) -> FoundationModels.LanguageModelSession {
-        let session = FoundationModels.LanguageModelSession(
-            model: .default,
-            tools: tools,
-            transcript: transcript
-        )
-        self.session = session
-        usesPrivateCloudCompute = false
-        modelName = "On-device"
-        return session
-    }
-
-    /// The innermost error: the ones around it say "error -1" and little
-    /// else, the inner one carries the code that names the cause.
-    private static func describe(_ error: any Error) -> String {
-        var inner = error as NSError
-        while let next = inner.underlyingErrors.first as NSError? {
-            inner = next
-        }
-        return "\(inner.domain) \(inner.code)"
-    }
-
-    /// Whether a failure is about reaching the model rather than about what
-    /// was asked: the on-device model gives the same answer to the latter.
-    private static func canRetryOnDevice(_ error: any Error) -> Bool {
-        if error is GeneratedContent.ParsingError {
-            return false
-        }
-        guard let modelError = error as? LanguageModelError else {
-            return true
-        }
-        switch modelError {
-        case .guardrailViolation, .refusal, .contextSizeExceeded,
-             .unsupportedGenerationGuide, .unsupportedLanguageOrLocale:
-            return false
-        default:
-            return true
-        }
     }
 
     /// Produces a response to a prompt.
     ///
     /// prompt: What to ask the model.
     /// schema: A class decorated with ``modeling.model``, to answer with an instance of it instead of text. Its annotated fields are the structure the model fills in, and defaults on them are offered to the model as defaults. Defaults to None.
-    /// reasoning: How much the model thinks before answering: "light", "moderate", or "deep". Only Private Cloud Compute reasons, so the on-device model ignores it. Defaults to None, the service's own default.
+    /// reasoning: How much the model thinks before answering: "light", "moderate", or "deep". The on-device model doesn't reason, so it ignores it. Defaults to None, the service's own default.
+    /// images: Images the model sees after the prompt: each a ``views.Image``, or PNG or JPEG bytes. Defaults to None.
     ///
     /// Returns a str, or an instance of `schema` where one is given, whose
     /// fields are then read as ordinary attributes. The response streams into
@@ -158,8 +100,10 @@ public class Agent {
     ///
     /// recipe = await agent.respond("A quick pasta dish", schema=Recipe)
     /// print(recipe.title)
+    ///
+    /// text = await agent.respond("What's in this photo?", images=[photo])
     /// ```
-    public func respond(_ prompt: String, schema: PyObject? = nil, reasoning: String? = nil) async throws -> PyObject {
+    public func respond(_ prompt: String, schema: PyObject? = nil, reasoning: String? = nil, images: [PyObject]? = nil) async throws -> PyObject {
         // Validated before anything is displayed, so a bad schema leaves no
         // "generating" card behind.
         var generationSchema: GenerationSchema?
@@ -176,25 +120,33 @@ public class Agent {
         }
 
         let reasoningLevel = try Self.reasoningLevel(named: reasoning)
+        let attachments = try (images ?? []).map(Self.attachment)
+        let prompt = FoundationModels.Prompt {
+            prompt
+            attachments
+        }
 
         let response = Response()
         var session = try resolvedSession()
-        let transcript = session.transcript
+        let transcript = Array(session.transcript)
 
         do {
             try await stream(prompt, schema: generationSchema, makeModel: makeModel, reasoning: reasoningLevel, from: session, into: response)
-        } catch where usesPrivateCloudCompute && Self.canRetryOnDevice(error) {
-            // No network, daily quota reached, the service down, or the app
-            // not yet entitled. Said on stderr: the on-device answer reads
-            // differently, and nothing else shows which model answered.
-            Self.privateCloudComputeFailedAt = Date()
-            _ = try? py.module("sys")?.throwing.stderr.write(
-                "Private Cloud Compute did not answer (\(Self.describe(error))); continuing on the on-device model.\n"
-            )
+        } catch {
+            guard let failed = sessionModel,
+                  let fallback = model.provider.fallback(after: error, on: failed) else {
+                throw Self.readable(error)
+            }
+            // Continues from the transcript as it was before the failed
+            // request, so the prompt is not repeated.
             response.content = ""
             response.model = nil
-            session = fallBackToDevice(transcript: transcript)
-            try await stream(prompt, schema: generationSchema, makeModel: makeModel, reasoning: nil, from: session, into: response)
+            session = start(on: fallback.model, named: fallback.name, reasons: false, history: transcript)
+            do {
+                try await stream(prompt, schema: generationSchema, makeModel: makeModel, reasoning: nil, from: session, into: response)
+            } catch {
+                throw Self.readable(error)
+            }
         }
 
         response.isComplete = true
@@ -208,6 +160,58 @@ public class Agent {
 }
 
 extension Agent {
+    /// Everything the session is made of, on `model`.
+    nonisolated func profile(for model: any FoundationModels.LanguageModel) -> sending LanguageModelSession.AnyDynamicProfile {
+        let instructions = instructions
+        let tools: [any FoundationModels.Tool] = tools
+        let skills = skills.map(\.skill)
+        let activations = activations
+        let base = LanguageModelSession.Profile {
+            if let instructions {
+                Instructions(instructions)
+            }
+            tools
+            if !skills.isEmpty {
+                Skills(activations: activations, skills: skills)
+            }
+        }
+        let shaped = history?.apply(to: base, summarizer: model) ?? .init(erasing: base)
+        return .init(erasing: shaped.model(model))
+    }
+
+    /// The framework's errors, said the way the person who asked can act on.
+    static func readable(_ error: any Error) -> any Error {
+        if error is GeneratedContent.ParsingError {
+            // Claude's API ends a refusal without an error, so a tool call it
+            // cut short is all that shows of it.
+            return PythonError.RuntimeError(
+                "The model's reply ended partway, so it couldn't be read. It does that when it declines a request, or runs out of room to answer. Try rephrasing the request."
+            )
+        }
+        guard let modelError = error as? LanguageModelError else { return error }
+        let message = switch modelError {
+        case .refusal:
+            "The model declined to answer. Try rephrasing the request."
+        case .guardrailViolation:
+            "The model's safety guardrails stopped the request or its reply."
+        case .contextSizeExceeded:
+            "The conversation is too long for the model."
+        case .rateLimited:
+            "The model is busy, or its rate limit was reached. Try again in a moment."
+        case .timeout:
+            "The model took too long to reply."
+        case .unsupportedCapability, .unsupportedGenerationGuide:
+            "The model doesn't support part of what was asked, such as the schema."
+        case .unsupportedTranscriptContent:
+            "The model can't take part of what was sent, such as an image."
+        case .unsupportedLanguageOrLocale:
+            "The model doesn't support this language."
+        @unknown default:
+            modelError.localizedDescription
+        }
+        return PythonError.RuntimeError(message)
+    }
+
     /// The reasoning level as the session takes it, checked before anything
     /// is sent. A string rather than the enum: only OS 27 has the enum, and
     /// the on-device model drops it either way.
@@ -219,15 +223,32 @@ extension Agent {
         return name
     }
 
+    /// An image the model sees: bytes, or anything with `png()`, like a ``views.Image``.
+    static func attachment(_ image: PyObject) throws -> FoundationModels.Attachment<ImageAttachmentContent> {
+        let data: Data
+        if let bytes = Data(image) {
+            data = bytes
+        } else if let png = try? image.throwing.png {
+            data = try png()
+        } else {
+            throw PythonError.TypeError("images must be views.Image or bytes, not \(image.typeName)")
+        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw PythonError.ValueError("images must be image data, like PNG or JPEG bytes")
+        }
+        return FoundationModels.Attachment(cgImage)
+    }
+
     private func stream(
-        _ prompt: String,
+        _ prompt: FoundationModels.Prompt,
         schema: GenerationSchema?,
         makeModel: PyObject?,
         reasoning: String?,
         from session: FoundationModels.LanguageModelSession,
         into response: Response
     ) async throws {
-        if let reasoning, usesPrivateCloudCompute {
+        if let reasoning, reasons {
             let level: ContextOptions.ReasoningLevel = switch reasoning {
             case "light": .light
             case "moderate": .moderate

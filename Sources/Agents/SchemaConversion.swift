@@ -56,6 +56,7 @@ public struct PythonModelSchemaConverter {
 
         return DynamicGenerationSchema.Property(
             name: name,
+            description: property["description"] as? String,
             schema: schema
         )
     }
