@@ -536,9 +536,11 @@ struct StreamEvent: Decodable {
         var name: String?
         var arguments: String?
         var encryptedContent: String?
+        /// An `image_generation_call`'s image, in base64.
+        var result: String?
 
         enum CodingKeys: String, CodingKey {
-            case type, id, name, arguments
+            case type, id, name, arguments, result
             case callID = "call_id"
             case encryptedContent = "encrypted_content"
         }

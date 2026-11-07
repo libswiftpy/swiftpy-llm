@@ -1,3 +1,4 @@
+import Foundation
 import SwiftPy
 import Agents
 
@@ -13,6 +14,18 @@ public func initialize(signInWithChatGPT: Bool = false) {
     PyBind.module("_chatgpt") { module in
         module.classes(ChatGPTLanguageModel.self)
         module.KEY_PROMPT = ChatGPTLanguageModel.keyPrompt
+        module.def(
+            "_generate_image(model, prompt: str, images: list[bytes], image_model: str, size: str | None, quality: str | None, complexity: str | None, background: str | None) -> bytes"
+        ) { argc, argv in
+            PyBind.function(argc, argv) { (
+                model: ChatGPTLanguageModel, prompt: String, images: [Data], imageModel: String,
+                size: String?, quality: String?, complexity: String?, background: String?
+            ) -> Data in
+                try await model.generateImage(prompt: prompt, images: images, options: ImageOptions(
+                    model: imageModel, size: size, quality: quality, complexity: complexity, background: background
+                ))
+            }
+        }
         bindAccount(module, signsIn: signInWithChatGPT)
     }
 

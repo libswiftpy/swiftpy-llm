@@ -12,7 +12,7 @@ from agents import Agent
 agent = Agent(model=chatgpt.sol())
 answer = await agent.respond("Name a pasta dish")
 ```"""
-__all__ = ["ChatGPTLanguageModel", "astra", "luna", "model", "sol"]
+__all__ = ["ChatGPTLanguageModel", "astra", "image", "luna", "model", "sol"]
 
 import _chatgpt
 import keychain
@@ -43,6 +43,46 @@ def model(name: str) -> ChatGPTLanguageModel:
     if _signed_in():
         return ChatGPTLanguageModel(name)
     return ChatGPTLanguageModel(name, keychain.secret("OPENAI_API_KEY", prompt=_KEY_PROMPT))
+
+
+async def image(
+    prompt: str,
+    images: list | None = None,
+    model: str = "gpt-image-2.6-flare",
+    size: str | None = None,
+    quality: str | None = None,
+    complexity: str | None = None,
+    background: str | None = None,
+):
+    """Generates an image, returned as a ``views.Image``.
+
+    ```python
+    import chatgpt
+
+    fox = await chatgpt.image("A watercolor fox")
+    night = await chatgpt.image("Make it night", images=[fox], model="gpt-image-2.6-sunburst")
+    ```
+
+    An agent can draw by calling this from a ``agents.tool``. Generating images
+    needs an OpenAI API key and is billed to it, even when signed in with ChatGPT,
+    and what an option accepts depends on the image model.
+
+    prompt: What to draw, or how to change `images`.
+    images: Images to edit or take after: each a ``views.Image`` or bytes.
+    model: The image model, such as "gpt-image-2.6-flare", the fastest, or "gpt-image-2.6-sunburst", the highest quality.
+    size: Such as "1024x1024" or "1536x1024". Defaults to the model's choice.
+    quality: Such as "low", "medium" or "high". Defaults to the model's choice.
+    complexity: How much the model plans: "low", "medium" or "high".
+    background: "transparent", "opaque" or "auto".
+    """
+    from views import Image
+
+    references = [item if isinstance(item, bytes) else item.png() for item in images or []]
+    data = await _chatgpt._generate_image(
+        ChatGPTLanguageModel("gpt-6-luna", keychain.secret("OPENAI_API_KEY", prompt=_KEY_PROMPT)),
+        prompt, references, model, size, quality, complexity, background,
+    )
+    return Image(data)
 
 
 def astra() -> ChatGPTLanguageModel:

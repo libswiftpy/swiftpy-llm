@@ -15,7 +15,7 @@ public final class ChatGPTLanguageModel {
     /// The model's ID, such as `"gpt-6.1-sol"`.
     public let name: String
 
-    private let apiKey: Secret?
+    let apiKey: Secret?
 
     /// A ChatGPT model. Prefer ``chatgpt.sol`` and the other functions of ``chatgpt``.
     ///
@@ -40,17 +40,19 @@ extension ChatGPTLanguageModel: CustomStringConvertible {
 
 extension ChatGPTLanguageModel: ModelProvider {
     package func resolve() throws(PythonError) -> (model: any FoundationModels.LanguageModel, name: String, reasons: Bool) {
-        // The signed-in plan before any key.
-        if ChatGPTAccount.shared.isSignedIn {
-            return (ResponsesLanguageModel(name: name, credential: .chatGPTPlan), name, true)
-        }
+        (ResponsesLanguageModel(name: name, credential: try credential()), name, true)
+    }
+
+    /// The signed-in plan before any key.
+    func credential() throws(PythonError) -> ResponsesLanguageModel.Credential {
+        if ChatGPTAccount.shared.isSignedIn { return .chatGPTPlan }
         guard let apiKey else {
             throw .RuntimeError("No OpenAI API key was given, and no ChatGPT account is signed in.")
         }
         guard let key = apiKey.value, !key.isEmpty else {
             throw .RuntimeError("No API key is stored under '\(apiKey.name)'.")
         }
-        return (ResponsesLanguageModel(name: name, apiKey: key), name, true)
+        return .apiKey(key)
     }
 
     package func fallback(
